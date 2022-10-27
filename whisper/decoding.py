@@ -154,8 +154,8 @@ class PyTorchInference(Inference):
 
         #return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
         offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device)
-        #return self.model.decoder(tokens, k, v, offset_tensor)
-        return self.model.decoder(tokens, k, v, offset_tensor, self.kv_cache) # for debug TODO remove
+        return self.model.decoder(tokens, k, v, offset_tensor)
+        #return self.model.decoder(tokens, k, v, offset_tensor, self.kv_cache) # for debug TODO remove
 
     def cleanup_caching(self):
         for hook in self.hooks:

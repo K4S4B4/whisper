@@ -343,12 +343,12 @@ class TextDecoderPreKv(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-        x0 = x
+        #x0 = x.clone()
 
         #offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0 # diff!
         x = self.textDecoder.token_embedding(x) + self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #same
         x = x.to(k.dtype) #same
-        x1 = x
+        #x1 = x.clone()
 
         i = 0
         for block in self.blocks:
@@ -359,11 +359,11 @@ class TextDecoderPreKv(nn.Module):
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
 
         #################### orginal
-        offset0 = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
-        x0 = self.textDecoder.token_embedding(x0) + self.textDecoder.positional_embedding[offset0 : offset0 + x0.shape[-1]]
-        x0 = x0.to(k.dtype)
+        #offset0 = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
+        #x0 = self.textDecoder.token_embedding(x0) + self.textDecoder.positional_embedding[offset0 : offset0 + x0.shape[-1]]
+        #x0 = x0.to(k.dtype)
 
-        diff = x1 - x0
+        #diff = x1 - x0
 
         #for block in self.blocks:
         #    x0 = block(x, xa, mask=self.mask, kv_cache=kv_cache)

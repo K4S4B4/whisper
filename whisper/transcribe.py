@@ -325,5 +325,9 @@ if __name__ == '__main__':
     #cli()
     from __init__ import load_model
     model = load_model("base")
+    args = {}
+    args["language"] = "en"
+    #args["language"] = "ja"
     result = model.transcribe("tests/jfk.flac")
+    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     print(result["text"])
