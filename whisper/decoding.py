@@ -40,12 +40,16 @@ def detect_language(model: "Whisper", mel: Tensor, tokenizer: Tokenizer = None) 
 
     # skip encoder forward pass if already-encoded audio features were given
     if mel.shape[-2:] != (model.dims.n_audio_ctx, model.dims.n_audio_state):
-        mel = model.encoder(mel)
+        #mel = model.encoder(mel)
+        k, v = model.encoder(mel)
 
     # forward pass using a single token, startoftranscript
-    n_audio = mel.shape[0]
-    x = torch.tensor([[tokenizer.sot]] * n_audio).to(mel.device)  # [n_audio, 1]
-    logits = model.logits(x, mel)[:, 0]
+    #n_audio = mel.shape[0]
+    #x = torch.tensor([[tokenizer.sot]] * n_audio).to(mel.device)  # [n_audio, 1]
+    #logits = model.logits(x, mel)[:, 0]
+    n_audio = k.shape[1]
+    x = torch.tensor([[tokenizer.sot]] * n_audio).to(k.device)  # [n_audio, 1]
+    logits = model.logits(x, k, v)[:, 0]
 
     # collect detected languages; suppress all non-language tokens
     mask = torch.ones(logits.shape[-1], dtype=torch.bool)
@@ -133,16 +137,24 @@ class PyTorchInference(Inference):
         self.initial_token_length = initial_token_length
         self.kv_cache = {}
         self.hooks = []
+        self.count = 0
 
-    def logits(self, tokens: Tensor, audio_features: Tensor) -> Tensor:
-        if not self.kv_cache:
-            self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
+    #def logits(self, tokens: Tensor, audio_features: Tensor) -> Tensor:
+    def logits(self, tokens: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        #if not self.kv_cache:
+        #    self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
 
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
+            offset = self.initial_token_length + self.count
+            self.count += 1
             tokens = tokens[:, -1:]
+        else:
+            offset = 0
 
-        return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
+        #return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
+        offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device)
+        return self.model.decoder(tokens, k, v, offset_tensor)
 
     def cleanup_caching(self):
         for hook in self.hooks:
@@ -558,34 +570,43 @@ class DecodingTask:
             # encoded audio features are given; skip audio encoding
             audio_features = mel
         else:
-            audio_features = self.model.encoder(mel)
+            #audio_features = self.model.encoder(mel)
+            k, v = self.model.encoder(mel)
 
-        if audio_features.dtype != (torch.float16 if self.options.fp16 else torch.float32):
+        #if audio_features.dtype != (torch.float16 if self.options.fp16 else torch.float32):
+        if k.dtype != (torch.float16 if self.options.fp16 else torch.float32):
             return TypeError(f"audio_features has an incorrect dtype: {audio_features.dtype}")
 
-        return audio_features
+        #return audio_features
+        return k, v
 
-    def _detect_language(self, audio_features: Tensor, tokens: Tensor):
-        languages = [self.options.language] * audio_features.shape[0]
+    #def _detect_language(self, audio_features: Tensor, tokens: Tensor):
+    def _detect_language(self, k: Tensor, v: Tensor, tokens: Tensor):
+        #languages = [self.options.language] * audio_features.shape[0]
+        languages = [self.options.language] * k.shape[1]
         lang_probs = None
 
         if self.options.language is None or self.options.task == "lang_id":
-            lang_tokens, lang_probs = self.model.detect_language(audio_features, self.tokenizer)
+            #lang_tokens, lang_probs = self.model.detect_language(audio_features, self.tokenizer)
+            lang_tokens, lang_probs = self.model.detect_language(k, v, self.tokenizer)
             languages = [max(probs, key=probs.get) for probs in lang_probs]
             if self.options.language is None:
                 tokens[:, self.sot_index + 1] = lang_tokens  # write language tokens
 
         return languages, lang_probs
 
-    def _main_loop(self, audio_features: Tensor, tokens: Tensor):
-        assert audio_features.shape[0] == tokens.shape[0]
+    #def _main_loop(self, audio_features: Tensor, tokens: Tensor):
+    def _main_loop(self, k: Tensor, v: Tensor, tokens: Tensor):
+        #assert audio_features.shape[0] == tokens.shape[0]
         n_batch = tokens.shape[0]
-        sum_logprobs: Tensor = torch.zeros(n_batch, device=audio_features.device)
+        #sum_logprobs: Tensor = torch.zeros(n_batch, device=audio_features.device)
+        sum_logprobs: Tensor = torch.zeros(n_batch, device=k.device)
         no_speech_probs = [np.nan] * n_batch
 
         try:
             for i in range(self.sample_len):
-                logits = self.inference.logits(tokens, audio_features)
+                #logits = self.inference.logits(tokens, audio_features)
+                logits = self.inference.logits(tokens, k, v)
 
                 if i == 0 and self.tokenizer.no_speech is not None:  # save no_speech_probs
                     probs_at_sot = logits[:, self.sot_index].float().softmax(dim=-1)
@@ -614,28 +635,33 @@ class DecodingTask:
         tokenizer: Tokenizer = self.tokenizer
         n_audio: int = mel.shape[0]
 
-        audio_features: Tensor = self._get_audio_features(mel)  # encoder forward pass
+        #audio_features: Tensor = self._get_audio_features(mel)  # encoder forward pass
+        k, v = self._get_audio_features(mel)  # encoder forward pass
         tokens: Tensor = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
 
         # detect language if requested, overwriting the language token
-        languages, language_probs = self._detect_language(audio_features, tokens)
+        #languages, language_probs = self._detect_language(audio_features, tokens)
+        languages, language_probs = self._detect_language(k, v, tokens)
         if self.options.task == "lang_id":
             return [
                 DecodingResult(audio_features=features, language=language, language_probs=probs)
                 for features, language, probs in zip(audio_features, languages, language_probs)
             ]
 
-        # repeat the audio & text tensors by the group size, for beam search or best-of-n sampling
-        audio_features = audio_features.repeat_interleave(self.n_group, dim=0)
-        tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
+        ## repeat the audio & text tensors by the group size, for beam search or best-of-n sampling
+        #audio_features = audio_features.repeat_interleave(self.n_group, dim=0)
+        #tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
+        tokens = tokens.to(k.device)
 
         # call the main sampling loop
-        tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens)
+        #tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens)
+        tokens, sum_logprobs, no_speech_probs = self._main_loop(k, v, tokens)
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions
-        audio_features = audio_features[:: self.n_group]
+        #audio_features = audio_features[:: self.n_group]
+        audio_features = k[0][:: self.n_group]
         no_speech_probs = no_speech_probs[:: self.n_group]
-        assert audio_features.shape[0] == len(no_speech_probs) == n_audio
+        #assert audio_features.shape[0] == len(no_speech_probs) == n_audio
 
         tokens = tokens.reshape(n_audio, self.n_group, -1)
         sum_logprobs = sum_logprobs.reshape(n_audio, self.n_group)

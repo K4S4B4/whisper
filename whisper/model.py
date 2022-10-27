@@ -158,7 +158,6 @@ class AudioEncoder(nn.Module):
         x = self.ln_post(x)
         return x
 
-
 class TextDecoder(nn.Module):
     def __init__(self, n_vocab: int, n_ctx: int, n_state: int, n_head: int, n_layer: int):
         super().__init__()
@@ -261,6 +260,121 @@ class Whisper(nn.Module):
 
         self.decoder.apply(install_hooks)
         return cache, hooks
+
+    detect_language = detect_language_function
+    transcribe = transcribe_function
+    decode = decode_function
+
+class MultiHeadAttentionPreKv(nn.Module):
+    def __init__(self, in_multiHeadAttention: MultiHeadAttention):
+        super().__init__()
+        self.multiHeadAttention = in_multiHeadAttention
+
+    def forward(
+        self,
+        x: Tensor,
+        k: Tensor,
+        v: Tensor,
+        mask: Optional[Tensor] = None,
+    ):
+        q = self.multiHeadAttention.query(x)
+        wv = self.multiHeadAttention.qkv_attention(q, k, v, mask)
+        return self.multiHeadAttention.out(wv)
+
+class ResidualAttentionBlockPreKv(nn.Module):
+    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock):
+        super().__init__()
+        self.residualAttentionBlock = in_residualAttentionBlock
+        self.cross_attn = MultiHeadAttentionPreKv(in_residualAttentionBlock.cross_attn) if in_residualAttentionBlock.cross_attn else None
+
+    def forward(
+        self,
+        x: Tensor,
+        k: Tensor,
+        v: Tensor,
+        mask: Optional[Tensor] = None,
+    ):
+        x = x + self.residualAttentionBlock.attn(self.residualAttentionBlock.attn_ln(x), mask=mask) #same as orginal
+
+        if self.cross_attn:
+            x = x + self.cross_attn(self.residualAttentionBlock.cross_attn_ln(x), k, v) #diff!
+
+        x = x + self.residualAttentionBlock.mlp(self.residualAttentionBlock.mlp_ln(x)) #same as orginal
+        return x
+
+class AudioEncoderPreKv(nn.Module):
+    def __init__(self, in_audioEncoder: AudioEncoder, in_textDecoder: TextDecoder):
+        super().__init__()
+        self.audioEncoder = in_audioEncoder
+        self.textDecoder = in_textDecoder
+
+    def forward(self, x: Tensor):
+        """
+        x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
+        return : kv cache of the mel spectrogram of the audio
+        """
+        xa = self.audioEncoder(x)
+
+        k_list = []
+        v_list = []
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                k_list.append(block.cross_attn.key(xa))
+                v_list.append(block.cross_attn.value(xa))
+
+        k = torch.stack(k_list)
+        v = torch.stack(v_list)
+
+        return k, v
+
+class TextDecoderPreKv(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder):
+        super().__init__()
+        self.textDecoder = in_textDecoder
+
+        self.blocks = []
+        for orginal_block in self.textDecoder.blocks:
+            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
+
+    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor):
+        """
+        x : torch.LongTensor, shape = (batch_size, <= n_ctx)
+            the text tokens
+        xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
+            the encoded audio features to be attended on
+        """
+        #offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0 # diff!
+        x = self.textDecoder.token_embedding(x) + self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #same
+        x = x.to(k.dtype) #same
+
+        i = 0
+        for block in self.blocks:
+            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
+            i += 1
+
+        x = self.textDecoder.ln(x) #same
+        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+
+        return logits
+
+class WhisperPreKV(nn.Module):
+    def __init__(self, in_whisper: Whisper):
+        super().__init__()
+        self.whisper = in_whisper
+        self.dims = self.whisper.dims
+        self.encoder = AudioEncoderPreKv(self.whisper.encoder, self.whisper.decoder)
+        self.decoder = TextDecoderPreKv(self.whisper.decoder)
+
+    def logits(self, tokens: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        return self.decoder.forward(tokens, k, v, 0)
+
+    @property
+    def device(self):
+        return self.whisper.device
+
+    @property
+    def is_multilingual(self):
+        return self.whisper.is_multilingual
 
     detect_language = detect_language_function
     transcribe = transcribe_function
