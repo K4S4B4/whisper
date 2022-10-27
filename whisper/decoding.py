@@ -141,8 +141,8 @@ class PyTorchInference(Inference):
 
     #def logits(self, tokens: Tensor, audio_features: Tensor) -> Tensor:
     def logits(self, tokens: Tensor, k: Tensor, v: Tensor) -> Tensor:
-        #if not self.kv_cache:
-        #    self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
+        if not self.kv_cache:
+            self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
 
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
@@ -154,7 +154,8 @@ class PyTorchInference(Inference):
 
         #return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
         offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device)
-        return self.model.decoder(tokens, k, v, offset_tensor)
+        #return self.model.decoder(tokens, k, v, offset_tensor)
+        return self.model.decoder(tokens, k, v, offset_tensor, self.kv_cache) # for debug TODO remove
 
     def cleanup_caching(self):
         for hook in self.hooks:

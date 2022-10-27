@@ -336,16 +336,19 @@ class TextDecoderPreKv(nn.Module):
         for orginal_block in self.textDecoder.blocks:
             self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
 
-    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor):
+    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor, kv_cache: Optional[dict] = None):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
             the text tokens
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
+        x0 = x
+
         #offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0 # diff!
         x = self.textDecoder.token_embedding(x) + self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #same
         x = x.to(k.dtype) #same
+        x1 = x
 
         i = 0
         for block in self.blocks:
@@ -354,6 +357,20 @@ class TextDecoderPreKv(nn.Module):
 
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+
+        #################### orginal
+        offset0 = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
+        x0 = self.textDecoder.token_embedding(x0) + self.textDecoder.positional_embedding[offset0 : offset0 + x0.shape[-1]]
+        x0 = x0.to(k.dtype)
+
+        diff = x1 - x0
+
+        #for block in self.blocks:
+        #    x0 = block(x, xa, mask=self.mask, kv_cache=kv_cache)
+
+        #x = self.ln(x)
+        #logits = (x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)).float()
+
 
         return logits
 
@@ -367,6 +384,9 @@ class WhisperPreKV(nn.Module):
 
     def logits(self, tokens: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         return self.decoder.forward(tokens, k, v, 0)
+
+    def install_kv_cache_hooks(self, cache: Optional[dict] = None):
+        return self.whisper.install_kv_cache_hooks(cache)
 
     @property
     def device(self):
