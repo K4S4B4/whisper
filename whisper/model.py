@@ -344,19 +344,18 @@ class TextDecoderPreKv(nn.Module):
         for orginal_block in self.textDecoder.blocks:
             self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
 
-    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor, kv_cache: Optional[dict] = None):
+    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Optional[Tensor] = 0, kv_cache: Optional[dict] = None):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
             the text tokens
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-        #x0 = x.clone()
 
-        #offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0 # diff!
-        x = self.textDecoder.token_embedding(x) + self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #same
+        pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #diff! for pytorch execution
+        #pos_emb_slice = self.textDecoder.positional_embedding[offset] #diff! For onnx export
+        x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
         x = x.to(k.dtype) #same
-        #x1 = x.clone()
 
         i = 0
         for block in self.blocks:
@@ -366,20 +365,36 @@ class TextDecoderPreKv(nn.Module):
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
 
-        #################### orginal
-        #offset0 = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
-        #x0 = self.textDecoder.token_embedding(x0) + self.textDecoder.positional_embedding[offset0 : offset0 + x0.shape[-1]]
-        #x0 = x0.to(k.dtype)
+        return logits
 
-        #diff = x1 - x0
+class TextDecoderPreKv16tkn(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder):
+        super().__init__()
+        self.textDecoder = in_textDecoder
 
-        #for block in self.blocks:
-        #    x0 = block(x, xa, mask=self.mask, kv_cache=kv_cache)
+        self.blocks = []
+        for orginal_block in self.textDecoder.blocks:
+            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
 
-        #x = self.ln(x)
-        #logits = (x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)).float()
+    def forward(self, x: Tensor, k: Tensor, v: Tensor):
+        """
+        x : torch.LongTensor, shape = (batch_size, <= n_ctx)
+            the text tokens
+        xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
+            the encoded audio features to be attended on
+        """
 
+        pos_emb_slice = self.textDecoder.positional_embedding[0:16] #diff!
+        x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
+        x = x.to(k.dtype) #same
 
+        i = 0
+        for block in self.blocks:
+            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
+            i += 1
+
+        x = self.textDecoder.ln(x) #same
+        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
         return logits
 
 class WhisperPreKV(nn.Module):
@@ -389,6 +404,7 @@ class WhisperPreKV(nn.Module):
         self.dims = self.whisper.dims
         self.encoder = AudioEncoderPreKv(self.whisper.encoder, self.whisper.decoder)
         self.decoder = TextDecoderPreKv(self.whisper.decoder)
+        self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
 
     def logits(self, tokens: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         return self.decoder.forward(tokens, k, v, 0)
@@ -427,7 +443,43 @@ class WhisperPreKV(nn.Module):
         file_name_simp =  "encoder_" + name + ".smpl.onnx"
         onnx.save(onnx_model_simp, f'{file_name_simp}')
 
-    def exportOnnxDecoder(self, name, n_token: int):
+    def exportOnnxDecoder(self, name): # n_token = 1
+        n_state = self.dims.n_text_state
+        n_layer = self.dims.n_text_layer
+
+        token_list = []
+        token_list.append(torch.tensor(0, dtype=torch.int64).to('cuda'))
+        dummy_tokens = torch.stack(token_list).unsqueeze(0)
+        dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
+        dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
+        dummy_offset = torch.tensor(0, dtype=torch.int64).to('cuda').unsqueeze(0)
+
+        inputs = ( dummy_tokens, dummy_k, dummy_v, dummy_offset )
+
+        input_names = ['tokens', 'keys', 'values', 'offset']
+        output_names = ['logits']
+        file_name = "decoder_" + name + "_1tkn.onnx"
+        #output_names = ['no_speech_prob, probabilities']
+        torch.onnx.export(self.decoder,
+                        inputs,
+                        file_name,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names,
+                        #dynamic_axes={'kv_cache_in': {1: 'kv_cacheIn_dynamic_axes_1',
+                        #                              2: 'kv_cacheIn_dynamic_axes_2'},
+                        #              'kv_cache': {1: 'kv_cache_dynamic_axes_1',
+                        #                           2: 'kv_cache_dynamic_axes_2'}
+                        #              }
+                        )
+        onnx_model = onnx.load(f'{file_name}')
+        onnx_model_simp, check = simplify(onnx_model)
+        file_name_simp =  "decoder_" + name + "_1tkn.smpl.onnx"
+        onnx.save(onnx_model_simp, f'{file_name_simp}')
+
+    def exportOnnxDecoder16tkn(self, name, n_token: int):
         n_state = self.dims.n_text_state
         n_layer = self.dims.n_text_layer
 
@@ -438,12 +490,15 @@ class WhisperPreKV(nn.Module):
         dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
         dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
         dummy_offset = torch.tensor(0, dtype=torch.int64).to('cuda')
-        input_names = ['tokens', 'keys', 'values', 'offset']
+
+        inputs = ( dummy_tokens, dummy_k, dummy_v )
+
+        input_names = ['tokens', 'keys', 'values']
         output_names = ['logits']
         file_name = "decoder_" + name + "_" + str(n_token) + "tkn.onnx"
         #output_names = ['no_speech_prob, probabilities']
-        torch.onnx.export(self.decoder,
-                        ( dummy_tokens, dummy_k, dummy_v, dummy_offset),
+        torch.onnx.export(self.decoder16tkn,
+                        inputs,
                         file_name,
                         export_params=True,
                         opset_version=12,

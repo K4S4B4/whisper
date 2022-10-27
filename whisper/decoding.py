@@ -148,14 +148,16 @@ class PyTorchInference(Inference):
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
             offset = self.initial_token_length + self.count
+            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device).unsqueeze(0)
             self.count += 1
             tokens = tokens[:, -1:]
+            return self.model.decoder(tokens, k, v, offset_tensor)
         else:
             offset = 0
+            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device)
+            return self.model.decoder(tokens, k, v)
 
         #return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
-        offset_tensor = torch.tensor(offset, dtype=torch.int64).to(k.device)
-        return self.model.decoder(tokens, k, v, offset_tensor)
         #return self.model.decoder(tokens, k, v, offset_tensor, self.kv_cache) # for debug TODO remove
 
     def cleanup_caching(self):

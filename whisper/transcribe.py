@@ -331,8 +331,8 @@ if __name__ == '__main__':
     #args["language"] = "ja"
 
     #model.exportOnnxEncoder(model_name)
-    #model.exportOnnxDecoder(model_name, 16)
-    model.exportOnnxDecoder(model_name, 1)
+    #model.exportOnnxDecoder16tkn(model_name, 16)
+    #model.exportOnnxDecoder(model_name)
 
     result = model.transcribe("tests/jfk.flac")
     print(result["text"])
