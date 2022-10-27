@@ -11,6 +11,8 @@ from torch import nn
 from transcribe import transcribe as transcribe_function
 from decoding import detect_language as detect_language_function, decode as decode_function
 
+import onnx
+from onnxsim import simplify
 
 @dataclass
 class ModelDimensions:
@@ -313,8 +315,14 @@ class AudioEncoderPreKv(nn.Module):
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
         return : kv cache of the mel spectrogram of the audio
         """
+
+        # pre process
+        x = x.permute(0, 2, 1)
+
+        # original
         xa = self.audioEncoder(x)
 
+        # pre compute key-value for audio feature
         k_list = []
         v_list = []
         for block in self.textDecoder.blocks:
@@ -399,3 +407,56 @@ class WhisperPreKV(nn.Module):
     detect_language = detect_language_function
     transcribe = transcribe_function
     decode = decode_function
+
+    def exportOnnxEncoder(self, name):
+        dummy_input = torch.randn((1, 3000, 80), dtype=torch.float32).to('cuda')
+        input_names = ["mel_t"]
+        output_names = ['keys', 'values']
+        file_name = "encoder_" + name + ".onnx"
+        torch.onnx.export(self.encoder,
+                        ( dummy_input ),
+                        file_name,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names
+        )
+        onnx_model = onnx.load(f'{file_name}')
+        onnx_model_simp, check = simplify(onnx_model)
+        file_name_simp =  "encoder_" + name + ".smpl.onnx"
+        onnx.save(onnx_model_simp, f'{file_name_simp}')
+
+    def exportOnnxDecoder(self, name, n_token: int):
+        n_state = self.dims.n_text_state
+        n_layer = self.dims.n_text_layer
+
+        token_list = []
+        for i in range(n_token):
+            token_list.append(torch.tensor(0, dtype=torch.int64).to('cuda'))
+        dummy_tokens = torch.stack(token_list).unsqueeze(0)
+        dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
+        dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
+        dummy_offset = torch.tensor(0, dtype=torch.int64).to('cuda')
+        input_names = ['tokens', 'keys', 'values', 'offset']
+        output_names = ['logits']
+        file_name = "decoder_" + name + "_" + str(n_token) + "tkn.onnx"
+        #output_names = ['no_speech_prob, probabilities']
+        torch.onnx.export(self.decoder,
+                        ( dummy_tokens, dummy_k, dummy_v, dummy_offset),
+                        file_name,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names,
+                        #dynamic_axes={'kv_cache_in': {1: 'kv_cacheIn_dynamic_axes_1',
+                        #                              2: 'kv_cacheIn_dynamic_axes_2'},
+                        #              'kv_cache': {1: 'kv_cache_dynamic_axes_1',
+                        #                           2: 'kv_cache_dynamic_axes_2'}
+                        #              }
+                        )
+        onnx_model = onnx.load(f'{file_name}')
+        onnx_model_simp, check = simplify(onnx_model)
+        file_name_simp =  "decoder_" + name + "_" + str(n_token) + "tkn.smpl.onnx"
+        onnx.save(onnx_model_simp, f'{file_name_simp}')

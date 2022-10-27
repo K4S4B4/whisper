@@ -324,10 +324,18 @@ def cli():
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    model = load_model("base")
+    model_name = "base"
+    model = load_model(model_name)
     args = {}
     args["language"] = "en"
     #args["language"] = "ja"
+
+    #model.exportOnnxEncoder(model_name)
+    #model.exportOnnxDecoder(model_name, 16)
+    model.exportOnnxDecoder(model_name, 1)
+
     result = model.transcribe("tests/jfk.flac")
-    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     print(result["text"])
+
+    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
+    #print(result["text"])
