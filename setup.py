@@ -7,12 +7,8 @@ setup(
     name="whisper",
     py_modules=["whisper"],
     version="1.0",
-    description="Robust Speech Recognition via Large-Scale Weak Supervision",
-    readme="README.md",
-    python_requires=">=3.7",
+    description="",
     author="OpenAI",
-    url="https://github.com/openai/whisper",
-    license="MIT",
     packages=find_packages(exclude=["tests*"]),
     install_requires=[
         str(r)

@@ -6,8 +6,9 @@ import ffmpeg
 import numpy as np
 import torch
 import torch.nn.functional as F
+import codecs
 
-from .utils import exact_div
+from utils import exact_div
 
 # hard-coded audio hyperparameters
 SAMPLE_RATE = 16000
@@ -55,7 +56,7 @@ def pad_or_trim(array, length: int = N_SAMPLES, *, axis: int = -1):
     """
     if torch.is_tensor(array):
         if array.shape[axis] > length:
-            array = array.index_select(dim=axis, index=torch.arange(length, device=array.device))
+            array = array.index_select(dim=axis, index=torch.arange(length))
 
         if array.shape[axis] < length:
             pad_widths = [(0, 0)] * array.ndim
@@ -112,13 +113,17 @@ def log_mel_spectrogram(audio: Union[str, np.ndarray, torch.Tensor], n_mels: int
         audio = torch.from_numpy(audio)
 
     window = torch.hann_window(N_FFT).to(audio.device)
-    stft = torch.stft(audio, N_FFT, HOP_LENGTH, window=window, return_complex=True)
-    magnitudes = stft[:, :-1].abs() ** 2
+    stft = torch.stft(audio, N_FFT, HOP_LENGTH, window=window, return_complex=True) #(201,1101), N_FFT=400, HOP_LENGTH=160
+    magnitudes = stft[:, :-1].abs() ** 2  #(201,1100)
 
-    filters = mel_filters(audio.device, n_mels)
-    mel_spec = filters @ magnitudes
+    filters = mel_filters(audio.device, n_mels) #(80,201)
+    mel_spec = filters @ magnitudes #(80,1100) = (80,201) @ (201,1100)
 
-    log_spec = torch.clamp(mel_spec, min=1e-10).log10()
-    log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
-    log_spec = (log_spec + 4.0) / 4.0
+    log_spec = torch.clamp(mel_spec, min=1e-10).log10() #(80,1100)
+    log_spec = torch.maximum(log_spec, log_spec.max() - 8.0) #(80,1100)
+    log_spec = (log_spec + 4.0) / 4.0 #(80,1100)
+
+    #torch.set_printoptions(edgeitems=100000)
+    #print(log_spec, file=codecs.open('log_spec.txt', 'w', 'utf-8'))
+    #print(filters, file=codecs.open('mel_filters.txt', 'w', 'utf-8'))
     return log_spec
