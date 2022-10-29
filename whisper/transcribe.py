@@ -99,6 +99,8 @@ def transcribe(
     task = decode_options.get("task", "transcribe")
     tokenizer = get_tokenizer(model.is_multilingual, language=language, task=task)
 
+    #enc = tokenizer.encode('A')
+
     def decode_with_fallback(segment: torch.Tensor) -> DecodingResult:
         temperatures = [temperature] if isinstance(temperature, (int, float)) else temperature
         decode_result = None
@@ -324,14 +326,18 @@ def cli():
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    model_name = "base"
+    model_name = "tiny"
+    #model_name = "base"
+    #model_name = "small"
+    #model_name = "medium"
     model = load_model(model_name)
     args = {}
     args["language"] = "en"
     #args["language"] = "ja"
 
     #model.exportOnnxEncoder(model_name)
-    #model.exportOnnxDecoder16tkn(model_name, 16)
+    #model.exportOnnxDecoderNtkn(model_name, 16)
+    
     #model.exportOnnxDecoder(model_name)
 
     result = model.transcribe("tests/jfk.flac")
