@@ -97,7 +97,11 @@ class MultiHeadAttention(nn.Module):
 
         qk = q @ k
         if mask is not None:
-            qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
+            #qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
+            n_ctx_cache = k.shape[-1] - n_ctx
+            mask0 = torch.zeros((n_ctx, n_ctx_cache), dtype=q.dtype).to(q.device);
+            mask_cat = torch.hstack((mask0, mask[:n_ctx, :n_ctx])) #(n_ctx, n_ctx_cache + n_ctx)
+            qk = qk + mask_cat
 
         w = F.softmax(qk.float(), dim=-1).to(q.dtype)
         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
@@ -316,9 +320,11 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         self_v_cache_updated = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
         wv = self.multiHeadAttention.qkv_attention(q, self_k_cache_updated, self_v_cache_updated, mask)
 
-        n_ctx_cache = self_k_cache.shape[1]
-        self_k_cache_updated = self_k_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
-        self_v_cache_updated = self_v_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+        #TODO enable static shape caching!!!
+        #n_ctx_cache = self_k_cache.shape[1]
+        #self_k_cache_updated = self_k_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
+        #self_v_cache_updated = self_v_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+
         return self.multiHeadAttention.out(wv), self_k_cache_updated, self_v_cache_updated
 
 class ResidualAttentionBlock_KvCache(nn.Module):
@@ -549,8 +555,8 @@ class WhisperPreKV(nn.Module):
         super().__init__()
         self.whisper = in_whisper
         self.dims = self.whisper.dims
-        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 1000) #TODO まずはキャッシュやめて動かす
-        self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 64)  #TODO まずは動的にn_ctx変えて動かす
+        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 0) #TODO まずはキャッシュやめて動かす
+        self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 0)  #TODO まずは動的にn_ctx変えて動かす
         #self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
         #self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
 
