@@ -326,10 +326,14 @@ def cli():
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    model_name = "tiny"
-    #model_name = "base"
+    #model_name = "tiny"
+    model_name = "base"
     #model_name = "small"
     #model_name = "medium"
+    #model_name = "tiny.en"
+    #model_name = "base.en"
+    #model_name = "small.en"
+    #model_name = "medium.en"
     model = load_model(model_name)
     args = {}
     args["language"] = "en"
@@ -337,6 +341,7 @@ if __name__ == '__main__':
 
     #model.exportOnnxEncoder(model_name)
     #model.exportOnnxDecoderNtkn(model_name, 16)
+    #model.exportOnnxDecoderNtkn(model_name, 64)
     
     #model.exportOnnxDecoder(model_name)
 

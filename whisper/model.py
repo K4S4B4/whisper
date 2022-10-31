@@ -13,6 +13,7 @@ from decoding import detect_language as detect_language_function, decode as deco
 
 import onnx
 from onnxsim import simplify
+import cv2
 
 @dataclass
 class ModelDimensions:
@@ -96,7 +97,7 @@ class MultiHeadAttention(nn.Module):
 
         qk = q @ k
         if mask is not None:
-            qk = qk + mask[:n_ctx, :n_ctx]
+            qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
 
         w = F.softmax(qk.float(), dim=-1).to(q.dtype)
         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
@@ -147,9 +148,20 @@ class AudioEncoder(nn.Module):
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
             the mel spectrogram of the audio
         """
+        #xnum = x.squeeze().to('cpu').detach().numpy().copy().astype(np.float32)
+        #xnum = cv2.resize(xnum, (1500, 320))
+        #cv2.imshow("EncBeferConv", xnum)
+        #cv2.waitKey(1)
+
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
+
+        #xnum = x.squeeze().to('cpu').detach().numpy().copy().astype(np.float32)
+        #cv2.imshow("EncAfterConv", xnum)
+        #cv2.waitKey(0)
+
         x = x.permute(0, 2, 1)
+
 
         assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
         x = (x + self.positional_embedding).to(x.dtype)
