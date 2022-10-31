@@ -591,17 +591,42 @@ class DecodingTask:
             # encoded audio features are given; skip audio encoding
             audio_features = mel
         else:
+            ##original
             #audio_features = self.model.encoder(mel)
             mel = mel.permute(0, 2, 1)
+
+            ##cross kv precompute
             #k, v = self.model.encoder(mel)
+
+            ##cross kv, n_self=0
+            #n_layer_self_k_cache_dummy = torch.ones((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device) * -1.0*2**8
+            #n_layer_self_v_cache_dummy = torch.zeros((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device)
+            #offset = 0
+            #offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
+            #k, v, n_layer_self_k_cache_dummy, n_layer_self_v_cache_dummy = self.model.encoder(mel, 
+            #                                                                                  n_layer_self_k_cache_dummy, 
+            #                                                                                  n_layer_self_v_cache_dummy, 
+            #                                                                                  offset_tensor)
+
             n_layer_self_k_cache_dummy = torch.ones((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device) * -1.0*2**8
             n_layer_self_v_cache_dummy = torch.zeros((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device)
-            offset = 0
-            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
-            k, v, n_layer_self_k_cache_dummy, n_layer_self_v_cache_dummy = self.model.encoder(mel, 
-                                                                                              n_layer_self_k_cache_dummy, 
-                                                                                              n_layer_self_v_cache_dummy, 
-                                                                                              offset_tensor)
+            self.model.encoder.n_ctx = 150 #n_ctx
+            k_list = []
+            v_list = []
+            for i in range(10):
+                s = (i+0) * 300
+                e = (i+1) * 300
+                offset=s/2
+                offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
+                mel_seg = mel[:,s:e,:]
+                k, v, n_layer_self_k_cache_dummy, n_layer_self_v_cache_dummy = self.model.encoder(mel_seg, 
+                                                                                                  n_layer_self_k_cache_dummy, 
+                                                                                                  n_layer_self_v_cache_dummy, 
+                                                                                                  offset_tensor)
+                k_list.append(k)
+                v_list.append(v)
+            k = torch.cat(k_list, dim=2)
+            v = torch.cat(v_list, dim=2)
 
         #if audio_features.dtype != (torch.float16 if self.options.fp16 else torch.float32):
         if k.dtype != (torch.float16 if self.options.fp16 else torch.float32):

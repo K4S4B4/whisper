@@ -373,6 +373,7 @@ class AudioEncoder_KvCache(nn.Module):
         return : n_layer_cross_k, n_layer_cross_v : precomputed kv for cross attention from decoder's query. shape = (n_layer, 1, n_ctx, 512)
         return : n_layer_self_k_cache_updated, n_layer_self_v_cache_updated : precomputed kv for self attention from encoder's query. shape = (n_layer, 1, n_ctx_cache + n_ctx, 512)
         """
+        print(x.shape)
 
         # pre process
         x = x.permute(0, 2, 1) #diff
@@ -400,6 +401,10 @@ class AudioEncoder_KvCache(nn.Module):
         n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
         xa = self.audioEncoder.ln_post(x) #same
+
+        #xnum = xa.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
+        #cv2.imshow("Enc_xa", xnum)
+        #cv2.waitKey(0)
 
         # pre compute key-value for audio feature
         cross_k_list = []
@@ -438,7 +443,6 @@ class TextDecoder_KvCache(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-
         pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + self.n_ctx] #diff!
         x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
         x = x.to(n_layer_cross_k.dtype) #same
