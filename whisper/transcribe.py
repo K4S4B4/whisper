@@ -83,17 +83,18 @@ def transcribe(
 
     mel = log_mel_spectrogram(audio)
 
-    if decode_options.get("language", None) is None:
-        if not model.is_multilingual:
-            decode_options["language"] = "en"
-        else:
-            if verbose:
-                print("Detecting language using up to the first 30 seconds. Use `--language` to specify the language")
-            segment = pad_or_trim(mel, N_FRAMES).to(model.device).to(dtype)
-            _, probs = model.detect_language(segment)
-            decode_options["language"] = max(probs, key=probs.get)
-            if verbose is not None:
-                print(f"Detected language: {LANGUAGES[decode_options['language']].title()}")
+    decode_options["language"] = "en"
+    #if decode_options.get("language", None) is None:
+    #    if not model.is_multilingual:
+    #        decode_options["language"] = "en"
+    #    else:
+    #        if verbose:
+    #            print("Detecting language using up to the first 30 seconds. Use `--language` to specify the language")
+    #        segment = pad_or_trim(mel, N_FRAMES).to(model.device).to(dtype)
+    #        _, probs = model.detect_language(segment)
+    #        decode_options["language"] = max(probs, key=probs.get)
+    #        if verbose is not None:
+    #            print(f"Detected language: {LANGUAGES[decode_options['language']].title()}")
 
     language = decode_options["language"]
     task = decode_options.get("task", "transcribe")

@@ -279,7 +279,7 @@ class Whisper(nn.Module):
     transcribe = transcribe_function
     decode = decode_function
 
-class MultiHeadAttentionPreKv(nn.Module):
+class MultiHeadAttention_CrossKvCache(nn.Module):
     def __init__(self, in_multiHeadAttention: MultiHeadAttention):
         super().__init__()
         self.multiHeadAttention = in_multiHeadAttention
@@ -287,76 +287,145 @@ class MultiHeadAttentionPreKv(nn.Module):
     def forward(
         self,
         x: Tensor,
-        k: Tensor,
-        v: Tensor,
+        cross_k: Tensor,
+        cross_v: Tensor,
         mask: Optional[Tensor] = None,
     ):
         q = self.multiHeadAttention.query(x)
-        wv = self.multiHeadAttention.qkv_attention(q, k, v, mask)
+        wv = self.multiHeadAttention.qkv_attention(q, cross_k, cross_v, mask)
         return self.multiHeadAttention.out(wv)
 
-class ResidualAttentionBlockPreKv(nn.Module):
-    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock):
+class MultiHeadAttention_SelfKvCache(nn.Module):
+    def __init__(self, in_multiHeadAttention: MultiHeadAttention):
         super().__init__()
-        self.residualAttentionBlock = in_residualAttentionBlock
-        self.cross_attn = MultiHeadAttentionPreKv(in_residualAttentionBlock.cross_attn) if in_residualAttentionBlock.cross_attn else None
+        self.multiHeadAttention = in_multiHeadAttention
 
     def forward(
         self,
         x: Tensor,
-        k: Tensor,
-        v: Tensor,
+        self_k_cache: Tensor, #(1, n_ctx_cache, 512)
+        self_v_cache: Tensor, #(1, n_ctx_cache, 512)
         mask: Optional[Tensor] = None,
     ):
-        x = x + self.residualAttentionBlock.attn(self.residualAttentionBlock.attn_ln(x), mask=mask) #same as orginal
+        n_ctx = x.shape[1]
+
+        q = self.multiHeadAttention.query(x)
+        k = self.multiHeadAttention.key(x)   #(1, n_ctx, 512)
+        v = self.multiHeadAttention.value(x) #(1, n_ctx, 512)
+        self_k_cache_updated = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
+        self_v_cache_updated = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
+        wv = self.multiHeadAttention.qkv_attention(q, self_k_cache_updated, self_v_cache_updated, mask)
+
+        n_ctx_cache = self_k_cache.shape[1]
+        self_k_cache_updated = self_k_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
+        self_v_cache_updated = self_v_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+        return self.multiHeadAttention.out(wv), self_k_cache_updated, self_v_cache_updated
+
+class ResidualAttentionBlock_KvCache(nn.Module):
+    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock):
+        super().__init__()
+        self.originalBlock = in_residualAttentionBlock
+        self.attn = MultiHeadAttention_SelfKvCache(in_residualAttentionBlock.attn)
+        self.cross_attn = MultiHeadAttention_CrossKvCache(in_residualAttentionBlock.cross_attn) if in_residualAttentionBlock.cross_attn else None
+
+    def forward(
+        self,
+        x: Tensor,
+        self_k_cache: Optional[Tensor] = None,
+        self_v_cache: Optional[Tensor] = None,
+        cross_k: Optional[Tensor] = None,
+        cross_v: Optional[Tensor] = None,
+        mask: Optional[Tensor] = None,
+    ):
+        self_attn_x, self_k_cache_updated, self_v_cache_updated = self.attn(self.originalBlock.attn_ln(x), self_k_cache, self_v_cache, mask=mask) #diff!
+        x = x + self_attn_x
 
         if self.cross_attn:
-            x = x + self.cross_attn(self.residualAttentionBlock.cross_attn_ln(x), k, v) #diff!
+            x = x + self.cross_attn(self.originalBlock.cross_attn_ln(x), cross_k, cross_v) #diff!
 
-        x = x + self.residualAttentionBlock.mlp(self.residualAttentionBlock.mlp_ln(x)) #same as orginal
-        return x
+        x = x + self.originalBlock.mlp(self.originalBlock.mlp_ln(x)) #same as orginal
+        return x, self_k_cache_updated, self_v_cache_updated
 
-class AudioEncoderPreKv(nn.Module):
-    def __init__(self, in_audioEncoder: AudioEncoder, in_textDecoder: TextDecoder):
+class AudioEncoder_KvCache(nn.Module):
+    def __init__(self, in_audioEncoder: AudioEncoder, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int):
         super().__init__()
         self.audioEncoder = in_audioEncoder
         self.textDecoder = in_textDecoder
+        self.n_ctx_cache = in_n_ctx_cache #値どこでも使ってないぞい
+        self.n_ctx = in_n_ctx
 
-    def forward(self, x: Tensor):
+        self.blocks = []
+        for orginal_block in self.audioEncoder.blocks:
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
+
+    def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, offset: int):
         """
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
-        return : kv cache of the mel spectrogram of the audio
+        n_layer_self_k_cache : shape = (n_layer, 1, n_ctx_cache, 512)
+        n_layer_self_v_cache : shape = (n_layer, 1, n_ctx_cache, 512)
+        offset : where the positional_embedding starts for x. [0, 1499]
+        return : n_layer_cross_k, n_layer_cross_v : precomputed kv for cross attention from decoder's query. shape = (n_layer, 1, n_ctx, 512)
+        return : n_layer_self_k_cache_updated, n_layer_self_v_cache_updated : precomputed kv for self attention from encoder's query. shape = (n_layer, 1, n_ctx_cache + n_ctx, 512)
         """
 
         # pre process
-        x = x.permute(0, 2, 1)
+        x = x.permute(0, 2, 1) #diff
 
-        # original
-        xa = self.audioEncoder(x)
+        x = F.gelu(self.audioEncoder.conv1(x)) #same
+        x = F.gelu(self.audioEncoder.conv2(x)) #same
+        x = x.permute(0, 2, 1) #same
+
+        x = (x + self.audioEncoder.positional_embedding[offset:offset+self.n_ctx]).to(x.dtype) #diff
+
+        #diff
+        # calc self attention while inputing and outputing kv_cache
+        i = 0
+        self_k_cache_update_list = []
+        self_v_cache_update_list = []
+        for block in self.blocks:
+            x, self_k_cache_updated, self_v_cache_updated = block(x, 
+                                                                  self_k_cache = n_layer_self_k_cache[i], 
+                                                                  self_v_cache = n_layer_self_v_cache[i]) 
+            self_k_cache_update_list.append(self_k_cache_updated)
+            self_v_cache_update_list.append(self_v_cache_updated)
+            i += 1
+
+        n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
+        n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
+
+        xa = self.audioEncoder.ln_post(x) #same
 
         # pre compute key-value for audio feature
-        k_list = []
-        v_list = []
+        cross_k_list = []
+        cross_v_list = []
         for block in self.textDecoder.blocks:
             if block.cross_attn:
-                k_list.append(block.cross_attn.key(xa))
-                v_list.append(block.cross_attn.value(xa))
+                cross_k_list.append(block.cross_attn.key(xa))
+                cross_v_list.append(block.cross_attn.value(xa))
 
-        k = torch.stack(k_list)
-        v = torch.stack(v_list)
+        n_layer_cross_k = torch.stack(cross_k_list)
+        n_layer_cross_v = torch.stack(cross_v_list)
 
-        return k, v
+        return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
-class TextDecoderPreKv(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder):
+class TextDecoder_KvCache(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int):
         super().__init__()
         self.textDecoder = in_textDecoder
+        self.n_ctx_cache = in_n_ctx_cache #値どこでも使ってないぞい
+        self.n_ctx = in_n_ctx
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
 
-    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Optional[Tensor] = 0, kv_cache: Optional[dict] = None):
+    def forward(self, x: Tensor, 
+                n_layer_self_k_cache: Tensor, 
+                n_layer_self_v_cache: Tensor,
+                n_layer_cross_k: Tensor, 
+                n_layer_cross_v: Tensor, 
+                offset: Optional[Tensor] = 0
+                ):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
             the text tokens
@@ -364,20 +433,33 @@ class TextDecoderPreKv(nn.Module):
             the encoded audio features to be attended on
         """
 
-        pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + x.shape[-1]] #diff! for pytorch execution
-        #pos_emb_slice = self.textDecoder.positional_embedding[offset] #diff! For onnx export
+        pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + self.n_ctx] #diff!
         x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
-        x = x.to(k.dtype) #same
+        x = x.to(n_layer_cross_k.dtype) #same
 
+        # calc self attention while inputing and outputing kv_cache
         i = 0
+        self_k_cache_update_list = []
+        self_v_cache_update_list = []
         for block in self.blocks:
-            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
+            x, self_k_cache_updated, self_v_cache_updated = block(x, 
+                                                                  self_k_cache = n_layer_self_k_cache[i], 
+                                                                  self_v_cache = n_layer_self_v_cache[i],
+                                                                  cross_k = n_layer_cross_k[i], 
+                                                                  cross_v = n_layer_cross_v[i], 
+                                                                  mask=self.textDecoder.mask) # diff!
+            self_k_cache_update_list.append(self_k_cache_updated)
+            self_v_cache_update_list.append(self_v_cache_updated)
             i += 1
+
+        n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
+        n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
 
-        return logits
+        return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+        #TODO get probs for ONNX export!!!
 
 class TextDecoderPreKv1tkn(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder):
@@ -386,7 +468,7 @@ class TextDecoderPreKv1tkn(nn.Module):
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
 
     def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor):
         pos_emb_slice = self.textDecoder.positional_embedding[offset] #diff! For onnx export
@@ -412,7 +494,7 @@ class TextDecoderPreKv16tkn(nn.Module):
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
 
     def forward(self, x: Tensor, k: Tensor, v: Tensor):
         pos_emb_slice = self.textDecoder.positional_embedding[0:16] #diff!
@@ -440,7 +522,7 @@ class TextDecoderPreKvNtkn(nn.Module):
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlockPreKv(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
 
     def forward(self, x: Tensor, k: Tensor, v: Tensor):
         pos_emb_slice = self.textDecoder.positional_embedding[0:self.n_token] #diff!
@@ -467,10 +549,10 @@ class WhisperPreKV(nn.Module):
         super().__init__()
         self.whisper = in_whisper
         self.dims = self.whisper.dims
-        self.encoder = AudioEncoderPreKv(self.whisper.encoder, self.whisper.decoder)
-        self.decoder = TextDecoderPreKv(self.whisper.decoder)
-        self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
-        self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
+        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 1000) #TODO まずはキャッシュやめて動かす
+        self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 64)  #TODO まずは動的にn_ctx変えて動かす
+        #self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
+        #self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
 
     def logits(self, tokens: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         return self.decoder.forward(tokens, k, v, 0)
