@@ -152,28 +152,31 @@ class PyTorchInference(Inference):
         #if False:
             # only need to use the last token except in the first forward pass
             offset = self.initial_token_length + self.count
-            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(n_layer_cross_k.device).unsqueeze(0)
+            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device).unsqueeze(0)
             self.count += 1
             self.model.decoder.n_ctx = 1 #n_ctx
             tokens = tokens[:, -1:]
             self.model.decoder.n_ctx_cache += 1
+            positions = torch.arange(offset, offset+self.model.decoder.n_ctx, 1, dtype=torch.int64).to(self.model.device)
         else:
             # First
             offset = 0
-            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(n_layer_cross_k.device).unsqueeze(0)
+            offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device).unsqueeze(0)
             self.count = 0
             self.model.decoder.n_ctx = tokens.shape[-1] #n_ctx
             self.model.decoder.n_ctx_cache = 0
             self.n_layer_self_k_cache = torch.ones((self.model.dims.n_text_layer, 1, self.model.decoder.n_ctx_cache, self.model.dims.n_text_state), dtype=n_layer_cross_k.dtype).to(self.model.device) * -1.0*2**8
             self.n_layer_self_v_cache = torch.zeros((self.model.dims.n_text_layer, 1, self.model.decoder.n_ctx_cache, self.model.dims.n_text_state), dtype=n_layer_cross_k.dtype).to(self.model.device)
             self.model.decoder.n_ctx_cache += self.model.decoder.n_ctx
+            positions = torch.arange(offset, offset+self.model.decoder.n_ctx, 1, dtype=torch.int64).to(self.model.device)
 
         x, self.n_layer_self_k_cache, self.n_layer_self_v_cache = self.model.decoder(tokens, #(1, n_ctx)
                                                                                      n_layer_self_k_cache = self.n_layer_self_k_cache,
                                                                                      n_layer_self_v_cache = self.n_layer_self_v_cache,
                                                                                      n_layer_cross_k=n_layer_cross_k, 
                                                                                      n_layer_cross_v=n_layer_cross_v,
-                                                                                     offset=offset_tensor
+                                                                                     #offset=offset_tensor
+                                                                                     positions=positions
                                                                                      )
         return x
 
@@ -617,12 +620,15 @@ class DecodingTask:
                 s = (i+0) * 300
                 e = (i+1) * 300
                 offset=s/2
-                offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
+                #offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
+                positions = torch.arange(offset, offset+self.model.encoder.n_ctx, 1, dtype=torch.int64).to(self.model.device)
                 mel_seg = mel[:,s:e,:]
                 k, v, n_layer_self_k_cache_dummy, n_layer_self_v_cache_dummy = self.model.encoder(mel_seg, 
                                                                                                   n_layer_self_k_cache_dummy, 
                                                                                                   n_layer_self_v_cache_dummy, 
-                                                                                                  offset_tensor)
+                                                                                                  positions)
+                #TODO merge this self-cache and previous self-cache appropriately here!!!
+
                 k_list.append(k)
                 v_list.append(v)
             k = torch.cat(k_list, dim=2)

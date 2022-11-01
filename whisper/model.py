@@ -94,13 +94,17 @@ class MultiHeadAttention(nn.Module):
         q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
         k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
         v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
+        ## this gives the same result. Such reshaping into unknown shape makes the onnx graph dynamic
+        #q = q.view(1, q.shape[1], self.n_head, -1).permute(0, 2, 1, 3) * scale
+        #k = k.view(1, k.shape[1], self.n_head, -1).permute(0, 2, 3, 1) * scale
+        #v = v.view(1, v.shape[1], self.n_head, -1).permute(0, 2, 1, 3)
 
         qk = q @ k
         if mask is not None:
             #qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
             n_ctx_cache = k.shape[-1] - n_ctx
             mask0 = torch.zeros((n_ctx, n_ctx_cache), dtype=q.dtype).to(q.device);
-            mask_cat = torch.hstack((mask0, mask[:n_ctx, :n_ctx])) #(n_ctx, n_ctx_cache + n_ctx)
+            mask_cat = torch.cat((mask0, mask[:n_ctx, :n_ctx]), dim=1) #(n_ctx, n_ctx_cache + n_ctx)
             qk = qk + mask_cat
 
         w = F.softmax(qk.float(), dim=-1).to(q.dtype)
@@ -300,15 +304,17 @@ class MultiHeadAttention_CrossKvCache(nn.Module):
         return self.multiHeadAttention.out(wv)
 
 class MultiHeadAttention_SelfKvCache(nn.Module):
-    def __init__(self, in_multiHeadAttention: MultiHeadAttention):
+    def __init__(self, in_multiHeadAttention: MultiHeadAttention, in_cacheReturnRule: int):
         super().__init__()
         self.multiHeadAttention = in_multiHeadAttention
+        self.cacheReturnRule = in_cacheReturnRule
 
     def forward(
         self,
         x: Tensor,
         self_k_cache: Tensor, #(1, n_ctx_cache, 512)
         self_v_cache: Tensor, #(1, n_ctx_cache, 512)
+        positions: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
     ):
         n_ctx = x.shape[1]
@@ -316,22 +322,40 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         q = self.multiHeadAttention.query(x)
         k = self.multiHeadAttention.key(x)   #(1, n_ctx, 512)
         v = self.multiHeadAttention.value(x) #(1, n_ctx, 512)
-        self_k_cache_updated = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
-        self_v_cache_updated = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
-        wv = self.multiHeadAttention.qkv_attention(q, self_k_cache_updated, self_v_cache_updated, mask)
 
-        #TODO enable static shape caching!!!
-        #n_ctx_cache = self_k_cache.shape[1]
-        #self_k_cache_updated = self_k_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
-        #self_v_cache_updated = self_v_cache_updated[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+        if positions is None:
+            self_k_cache_appended = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
+            self_v_cache_appended = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
+            wv = self.multiHeadAttention.qkv_attention(q, self_k_cache_appended, self_v_cache_appended, mask)
 
-        return self.multiHeadAttention.out(wv), self_k_cache_updated, self_v_cache_updated
+            if self.cacheReturnRule == 0: #return just appended cache (n_ctx_cache + n_ctx)
+
+                return self.multiHeadAttention.out(wv), self_k_cache_appended, self_v_cache_appended
+
+            elif self.cacheReturnRule == 1: #return appended and shrinked to the size of input cache (n_ctx_cache)
+
+                #DONE shrinked to the size of input cache!!!
+                n_ctx_cache = self_k_cache.shape[1]
+                self_k_cache_shrinked = self_k_cache_appended[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
+                self_v_cache_shrinked = self_v_cache_appended[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+            
+                return self.multiHeadAttention.out(wv), self_k_cache_shrinked, self_v_cache_shrinked
+
+            elif self.cacheReturnRule == 2: #return only new cache (n_ctx)
+
+                return self.multiHeadAttention.out(wv), k, v
+
+        else: # similar to rule=1, but not append to the last. It overwrites the specified positions of the cache and return whole cache (n_ctx_cache). Meant to use for Encoder with static i/o of kv_cache (1,1500,512) if DirectML input with GPU memory achieved(Plan1)
+            self_k_cache[:, positions, :] = k
+            self_v_cache[:, positions, :] = v
+            wv = self.multiHeadAttention.qkv_attention(q, self_k_cache, self_v_cache, mask)
+            return self.multiHeadAttention.out(wv), self_k_cache, self_v_cache
 
 class ResidualAttentionBlock_KvCache(nn.Module):
-    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock):
+    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock, cacheReturnRule: int):
         super().__init__()
         self.originalBlock = in_residualAttentionBlock
-        self.attn = MultiHeadAttention_SelfKvCache(in_residualAttentionBlock.attn)
+        self.attn = MultiHeadAttention_SelfKvCache(in_residualAttentionBlock.attn, cacheReturnRule)
         self.cross_attn = MultiHeadAttention_CrossKvCache(in_residualAttentionBlock.cross_attn) if in_residualAttentionBlock.cross_attn else None
 
     def forward(
@@ -339,11 +363,12 @@ class ResidualAttentionBlock_KvCache(nn.Module):
         x: Tensor,
         self_k_cache: Optional[Tensor] = None,
         self_v_cache: Optional[Tensor] = None,
+        positions: Optional[Tensor] = None,
         cross_k: Optional[Tensor] = None,
         cross_v: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
     ):
-        self_attn_x, self_k_cache_updated, self_v_cache_updated = self.attn(self.originalBlock.attn_ln(x), self_k_cache, self_v_cache, mask=mask) #diff!
+        self_attn_x, self_k_cache_updated, self_v_cache_updated = self.attn(self.originalBlock.attn_ln(x), self_k_cache, self_v_cache, positions, mask=mask) #diff!
         x = x + self_attn_x
 
         if self.cross_attn:
@@ -362,9 +387,10 @@ class AudioEncoder_KvCache(nn.Module):
 
         self.blocks = []
         for orginal_block in self.audioEncoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=2))
 
-    def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, offset: int):
+    #def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, offset: int):
+    def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, positions: Tensor):
         """
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
         n_layer_self_k_cache : shape = (n_layer, 1, n_ctx_cache, 512)
@@ -382,7 +408,8 @@ class AudioEncoder_KvCache(nn.Module):
         x = F.gelu(self.audioEncoder.conv2(x)) #same
         x = x.permute(0, 2, 1) #same
 
-        x = (x + self.audioEncoder.positional_embedding[offset:offset+self.n_ctx]).to(x.dtype) #diff
+        pos_emb = self.audioEncoder.positional_embedding[positions] #diff
+        x = (x + pos_emb).to(x.dtype)
 
         #diff
         # calc self attention while inputing and outputing kv_cache
@@ -392,7 +419,9 @@ class AudioEncoder_KvCache(nn.Module):
         for block in self.blocks:
             x, self_k_cache_updated, self_v_cache_updated = block(x, 
                                                                   self_k_cache = n_layer_self_k_cache[i], 
-                                                                  self_v_cache = n_layer_self_v_cache[i]) 
+                                                                  self_v_cache = n_layer_self_v_cache[i]
+                                                                  #,positions = positions
+                                                                  ) 
             self_k_cache_update_list.append(self_k_cache_updated)
             self_v_cache_update_list.append(self_v_cache_updated)
             i += 1
@@ -420,7 +449,7 @@ class AudioEncoder_KvCache(nn.Module):
         return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
 class TextDecoder_KvCache(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int):
+    def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int, cacheReturnRule: int):
         super().__init__()
         self.textDecoder = in_textDecoder
         self.n_ctx_cache = in_n_ctx_cache #値どこでも使ってないぞい
@@ -428,14 +457,15 @@ class TextDecoder_KvCache(nn.Module):
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule))
 
     def forward(self, x: Tensor, 
                 n_layer_self_k_cache: Tensor, 
                 n_layer_self_v_cache: Tensor,
                 n_layer_cross_k: Tensor, 
                 n_layer_cross_v: Tensor, 
-                offset: Optional[Tensor] = 0
+                #offset: Optional[Tensor] = 0
+                positions: Optional[Tensor] = 0
                 ):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
@@ -443,7 +473,10 @@ class TextDecoder_KvCache(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-        pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + self.n_ctx] #diff!
+
+        #pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + self.n_ctx] #diff!
+        pos_emb_slice = self.textDecoder.positional_embedding[positions] #diff!
+
         x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
         x = x.to(n_layer_cross_k.dtype) #same
 
@@ -465,94 +498,17 @@ class TextDecoder_KvCache(nn.Module):
         n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
         n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
+        ##TODO slice for ONNX export!!! ここでSliceであってる？
+        #x = x[:,-1:0,:]
+
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
 
         return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
-        #TODO get probs for ONNX export!!!
 
-class TextDecoderPreKv1tkn(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder):
-        super().__init__()
-        self.textDecoder = in_textDecoder
-
-        self.blocks = []
-        for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
-
-    def forward(self, x: Tensor, k: Tensor, v: Tensor, offset: Tensor):
-        pos_emb_slice = self.textDecoder.positional_embedding[offset] #diff! For onnx export
-        x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
-        x = x.to(k.dtype) #same
-
-        i = 0
-        for block in self.blocks:
-            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
-            i += 1
-
-        x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-
-        probs = F.softmax(logits, dim=-1)
-
-        return probs
-
-class TextDecoderPreKv16tkn(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder):
-        super().__init__()
-        self.textDecoder = in_textDecoder
-
-        self.blocks = []
-        for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
-
-    def forward(self, x: Tensor, k: Tensor, v: Tensor):
-        pos_emb_slice = self.textDecoder.positional_embedding[0:16] #diff!
-        x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
-        x = x.to(k.dtype) #same
-
-        i = 0
-        for block in self.blocks:
-            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
-            i += 1
-
-        x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-
-        #TODO もっと早くSliceすべきかも
-        probs = F.softmax(logits[:,15:16,:], dim=-1)
-
-        return probs
-
-class TextDecoderPreKvNtkn(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder, in_n_token: int):
-        super().__init__()
-        self.textDecoder = in_textDecoder
-        self.n_token = in_n_token
-
-        self.blocks = []
-        for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block))
-
-    def forward(self, x: Tensor, k: Tensor, v: Tensor):
-        pos_emb_slice = self.textDecoder.positional_embedding[0:self.n_token] #diff!
-        x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
-        x = x.to(k.dtype) #same
-
-        i = 0
-        for block in self.blocks:
-            x = block(x, k[i], v[i], mask=self.textDecoder.mask) # diff!
-            i += 1
-
-        # get only last token's logit
-        x = x[:,self.n_token-1:self.n_token,:] #diff!
-
-        x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-
-        probs = F.softmax(logits, dim=-1) #diff!
-
-        return probs
+        ##TODO get probs for ONNX export!!!
+        #probs = F.softmax(logits, dim=-1)
+        #return probs, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
 class WhisperPreKV(nn.Module):
     def __init__(self, in_whisper: Whisper):
@@ -560,7 +516,7 @@ class WhisperPreKV(nn.Module):
         self.whisper = in_whisper
         self.dims = self.whisper.dims
         self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 0) #TODO まずはキャッシュやめて動かす
-        self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 0)  #TODO まずは動的にn_ctx変えて動かす
+        self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 0, 0)  #TODO まずは動的にn_ctx変えて動かす
         #self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
         #self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
 
@@ -582,137 +538,125 @@ class WhisperPreKV(nn.Module):
     transcribe = transcribe_function
     decode = decode_function
 
-    def exportOnnxEncoder(self, name):
+    def exportOnnxEncoder(self, name, n_ctx: int, isDynamic: bool):
         device = self.whisper.device
-        dummy_input = torch.randn((1, 3000, 80), dtype=torch.float32).to(device)
-        input_names = ["mel_t"]
-        output_names = ['keys', 'values']
-        file_name = "encoder_" + name + ".onnx"
-        torch.onnx.export(self.encoder,
-                        ( dummy_input ),
-                        file_name,
-                        export_params=True,
-                        opset_version=12,
-                        do_constant_folding=True,
-                        input_names=input_names, 
-                        output_names=output_names
-        )
-        onnx_model = onnx.load(f'{file_name}')
-        onnx_model_simp, check = simplify(onnx_model)
-        file_name_simp =  "encoder_" + name + ".smpl.onnx"
-        onnx.save(onnx_model_simp, f'{file_name_simp}')
-
-    def exportOnnxDecoder(self, name): # n_token = 1
-        n_state = self.dims.n_text_state
         n_layer = self.dims.n_text_layer
-
-        token_list = []
-        token_list.append(torch.tensor(0, dtype=torch.int64).to('cuda'))
-        dummy_tokens = torch.stack(token_list).unsqueeze(0)
-        dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
-        dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
-        dummy_offset = torch.tensor(0, dtype=torch.int64).to('cuda').unsqueeze(0)
-
-        inputs = ( dummy_tokens, dummy_k, dummy_v, dummy_offset )
-
-        input_names = ['tokens', 'keys', 'values', 'offset']
-        #output_names = ['logits']
-        output_names = ['probabilities']
-        file_name = "decoder_" + name + "_1tkn.onnx"
-        torch.onnx.export(self.decoder1tkn,
-                        inputs,
-                        file_name,
-                        export_params=True,
-                        opset_version=12,
-                        do_constant_folding=True,
-                        input_names=input_names, 
-                        output_names=output_names,
-                        #dynamic_axes={'kv_cache_in': {1: 'kv_cacheIn_dynamic_axes_1',
-                        #                              2: 'kv_cacheIn_dynamic_axes_2'},
-                        #              'kv_cache': {1: 'kv_cache_dynamic_axes_1',
-                        #                           2: 'kv_cache_dynamic_axes_2'}
-                        #              }
-                        )
-        onnx_model = onnx.load(f'{file_name}')
-        onnx_model_simp, check = simplify(onnx_model)
-        file_name_simp =  "decoder_" + name + "_1tkn.smpl.onnx"
-        onnx.save(onnx_model_simp, f'{file_name_simp}')
-
-    def exportOnnxDecoder16tkn(self, name, n_token: int):
         n_state = self.dims.n_text_state
-        n_layer = self.dims.n_text_layer
+        n_ctx_cache = 1500 - n_ctx
+        #n_ctx_cache = 1500
+        offset = 0
+        self.encoder.n_ctx = n_ctx
 
-        token_list = []
-        for i in range(n_token):
-            token_list.append(torch.tensor(0, dtype=torch.int64).to('cuda'))
-        dummy_tokens = torch.stack(token_list).unsqueeze(0)
-        dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
-        dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to('cuda')
-        dummy_offset = torch.tensor(0, dtype=torch.int64).to('cuda')
+        dummy_mel =     torch.randn((1, n_ctx * 2, 80), dtype=torch.float32).to(device)
+        dummy_k_cache = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        dummy_v_cache = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        #dummy_offset =  torch.tensor(offset, dtype=torch.int64).to(device).unsqueeze(0)
+        dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
 
-        inputs = ( dummy_tokens, dummy_k, dummy_v )
+        #inputs = ( dummy_mel, dummy_k_cache, dummy_v_cache, dummy_offset )
+        inputs = ( dummy_mel, dummy_k_cache, dummy_v_cache, dummy_positions )
+        input_names = ['mel_t', 'self_k_in', 'self_v_in', 'positions']
+        output_names = ['cross_k', 'cross_v', 'self_k_out', 'self_v_out']
 
-        input_names = ['tokens', 'keys', 'values']
-        #output_names = ['logits']
-        #output_names = ['no_speech_prob, probabilities']
-        output_names = ['probabilities']
-        file_name = "decoder_" + name + "_" + str(n_token) + "tkn.onnx"
-        torch.onnx.export(self.decoder16tkn,
-                        inputs,
-                        file_name,
-                        export_params=True,
-                        opset_version=12,
-                        do_constant_folding=True,
-                        input_names=input_names, 
-                        output_names=output_names,
-                        #dynamic_axes={'kv_cache_in': {1: 'kv_cacheIn_dynamic_axes_1',
-                        #                              2: 'kv_cacheIn_dynamic_axes_2'},
-                        #              'kv_cache': {1: 'kv_cache_dynamic_axes_1',
-                        #                           2: 'kv_cache_dynamic_axes_2'}
-                        #              }
-                        )
-        onnx_model = onnx.load(f'{file_name}')
-        onnx_model_simp, check = simplify(onnx_model)
-        file_name_simp =  "decoder_" + name + "_" + str(n_token) + "tkn.smpl.onnx"
+        if isDynamic:
+            file_name = "encoder_-1_" + name + ".onnx"
+            torch.onnx.export(self.encoder,
+                            inputs,
+                            file_name,
+                            export_params=True,
+                            opset_version=12,
+                            do_constant_folding=True,
+                            input_names=input_names, 
+                            output_names=output_names,
+                            dynamic_axes={'mel_t': {1: 'n_ctx'},
+                                          'positions': {0: 'n_ctx'},
+                                          'self_k_in': {2: 'n_ctx_cache'},
+                                          'self_v_in': {2: 'n_ctx_cache'},
+                                          'self_k_out': {2: 'n_ctx'},
+                                          'self_v_out': {2: 'n_ctx'},
+                                          }
+            )
+            onnx_model = onnx.load(f'{file_name}')
+            onnx_model_simp, check = simplify(onnx_model)
+            file_name_simp =  "encoder_-1_" + name + ".smpl.onnx"
+        else:
+            file_name = "encoder_" + str(n_ctx) + "_" + name + ".onnx"
+            torch.onnx.export(self.encoder,
+                            inputs,
+                            file_name,
+                            export_params=True,
+                            opset_version=12,
+                            do_constant_folding=True,
+                            input_names=input_names, 
+                            output_names=output_names
+            )
+            onnx_model = onnx.load(f'{file_name}')
+            onnx_model_simp, check = simplify(onnx_model)
+            file_name_simp =  "encoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
         onnx.save(onnx_model_simp, f'{file_name_simp}')
 
-    def exportOnnxDecoderNtkn(self, name, n_token: int):
-        self.decoderNtkn = TextDecoderPreKvNtkn(self.whisper.decoder, n_token)
+    def exportOnnxDecoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamic: bool):
+        if isDynamic:
+            self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=0)
+        else:
+            self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2)
+
         device = self.whisper.device
-
         n_state = self.dims.n_text_state
         n_layer = self.dims.n_text_layer
+        offset = 0
 
         token_list = []
-        for i in range(n_token):
+        for i in range(n_ctx):
             token_list.append(torch.tensor(0, dtype=torch.int64).to(device))
         dummy_tokens = torch.stack(token_list).unsqueeze(0)
-        dummy_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to(device)
-        dummy_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to(device)
-        dummy_offset = torch.tensor(0, dtype=torch.int64).to(device)
+        dummy_self_k = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        dummy_self_v = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        dummy_cross_k = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to(device) 
+        dummy_cross_v = torch.randn((n_layer, 1, 1500, n_state), dtype=torch.float32).to(device)
+        dummy_offset = torch.tensor(offset, dtype=torch.int64).to(device)
+        dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
 
-        inputs = ( dummy_tokens, dummy_k, dummy_v )
+        inputs = ( dummy_tokens, dummy_self_k, dummy_self_v, dummy_cross_k, dummy_cross_v, dummy_positions )
 
-        input_names = ['tokens', 'keys', 'values']
-        #output_names = ['logits']
-        #output_names = ['no_speech_prob, probabilities']
-        output_names = ['probabilities']
-        file_name = "decoder_" + name + "_" + str(n_token) + "tkn.onnx"
-        torch.onnx.export(self.decoderNtkn,
-                        inputs,
-                        file_name,
-                        export_params=True,
-                        opset_version=12,
-                        do_constant_folding=True,
-                        input_names=input_names, 
-                        output_names=output_names,
-                        #dynamic_axes={'kv_cache_in': {1: 'kv_cacheIn_dynamic_axes_1',
-                        #                              2: 'kv_cacheIn_dynamic_axes_2'},
-                        #              'kv_cache': {1: 'kv_cache_dynamic_axes_1',
-                        #                           2: 'kv_cache_dynamic_axes_2'}
-                        #              }
-                        )
-        onnx_model = onnx.load(f'{file_name}')
-        onnx_model_simp, check = simplify(onnx_model)
-        file_name_simp =  "decoder_" + name + "_" + str(n_token) + "tkn.smpl.onnx"
+        input_names = ['tokens', 'self_k_in', 'self_v_in', 'cross_k', 'cross_v', 'positions']
+        output_names = ['probabilities', 'self_k_out', 'self_v_out']
+
+        if isDynamic:
+            file_name = "decoder_-1_" + name + ".onnx"
+            torch.onnx.export(self.decoderE,
+                            inputs,
+                            file_name,
+                            export_params=True,
+                            opset_version=12,
+                            do_constant_folding=True,
+                            input_names=input_names, 
+                            output_names=output_names,
+                            dynamic_axes={'tokens': {1: 'n_ctx'},
+                                          'positions': {0: 'n_ctx'},
+                                          'self_k_in': {2: 'n_ctx_cache_in'},
+                                          'self_v_in': {2: 'n_ctx_cache_in'},
+                                          'self_k_out': {2: 'n_ctx_cache_out'},
+                                          'self_v_out': {2: 'n_ctx_cache_out'},
+                                          }
+                            )
+            onnx_model = onnx.load(f'{file_name}')
+            onnx_model_simp, check = simplify(onnx_model)
+            file_name_simp =  "decoder_-1_" + name + ".smpl.onnx"
+
+        else:
+            file_name = "decoder_" + str(n_ctx) + "_" + name + ".onnx"
+            torch.onnx.export(self.decoderE,
+                            inputs,
+                            file_name,
+                            export_params=True,
+                            opset_version=12,
+                            do_constant_folding=True,
+                            input_names=input_names, 
+                            output_names=output_names
+                            )
+            onnx_model = onnx.load(f'{file_name}')
+            onnx_model_simp, check = simplify(onnx_model)
+            file_name_simp =  "decoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
+
         onnx.save(onnx_model_simp, f'{file_name_simp}')
