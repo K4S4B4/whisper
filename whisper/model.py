@@ -390,7 +390,11 @@ class AudioEncoder_KvCache(nn.Module):
             self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=2))
 
     #def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, offset: int):
-    def forward(self, x: Tensor, n_layer_self_k_cache: Tensor, n_layer_self_v_cache: Tensor, positions: Tensor):
+    def forward(self, 
+                x: Tensor, 
+                n_layer_self_k_cache: Tensor, 
+                n_layer_self_v_cache: Tensor, 
+                positions: Tensor):
         """
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
         n_layer_self_k_cache : shape = (n_layer, 1, n_ctx_cache, 512)
@@ -515,7 +519,7 @@ class WhisperPreKV(nn.Module):
         super().__init__()
         self.whisper = in_whisper
         self.dims = self.whisper.dims
-        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 0) #TODO まずはキャッシュやめて動かす
+        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 1000) #TODO まずはキャッシュやめて動かす
         self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 0, 0)  #TODO まずは動的にn_ctx変えて動かす
         #self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
         #self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
@@ -542,12 +546,13 @@ class WhisperPreKV(nn.Module):
         device = self.whisper.device
         n_layer = self.dims.n_text_layer
         n_state = self.dims.n_text_state
-        n_ctx_cache = 1500 - n_ctx
-        #n_ctx_cache = 1500
+        #n_ctx_cache = 1500 - n_ctx
+        n_ctx_cache = 1000
+        n_mel = n_ctx * 2
         offset = 0
         self.encoder.n_ctx = n_ctx
 
-        dummy_mel =     torch.randn((1, n_ctx * 2, 80), dtype=torch.float32).to(device)
+        dummy_mel =     torch.randn((1, n_mel, 80), dtype=torch.float32).to(device)
         dummy_k_cache = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
         dummy_v_cache = torch.randn((n_layer, 1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
         #dummy_offset =  torch.tensor(offset, dtype=torch.int64).to(device).unsqueeze(0)
@@ -559,7 +564,8 @@ class WhisperPreKV(nn.Module):
         output_names = ['cross_k', 'cross_v', 'self_k_out', 'self_v_out']
 
         if isDynamic:
-            file_name = "encoder_-1_" + name + ".onnx"
+            #file_name = "encoder_-1_" + name + ".onnx"
+            file_name = "encoder_-1_1000_" + name + ".onnx"
             torch.onnx.export(self.encoder,
                             inputs,
                             file_name,
@@ -568,11 +574,14 @@ class WhisperPreKV(nn.Module):
                             do_constant_folding=True,
                             input_names=input_names, 
                             output_names=output_names,
-                            dynamic_axes={'mel_t': {1: 'n_ctx'},
-                                          'positions': {0: 'n_ctx'},
+                            dynamic_axes={
+                                          'mel_t': {1: 'n_mel'},
                                           'self_k_in': {2: 'n_ctx_cache'},
                                           'self_v_in': {2: 'n_ctx_cache'},
-                                          'self_k_out': {2: 'n_ctx_'},
+                                          'positions': {0: 'n_ctx'},
+                                          'cross_k': {2: 'n_ctx'},
+                                          'cross_v': {2: 'n_ctx'},
+                                          'self_k_out': {2: 'n_ctx'},
                                           'self_v_out': {2: 'n_ctx'},
                                           }
                             #dynamic_axes={'mel_t': [1],
@@ -585,7 +594,8 @@ class WhisperPreKV(nn.Module):
             )
             onnx_model = onnx.load(f'{file_name}')
             onnx_model_simp, check = simplify(onnx_model)
-            file_name_simp =  "encoder_-1_" + name + ".smpl.onnx"
+            #file_name_simp =  "encoder_-1_" + name + ".smpl.onnx"
+            file_name_simp =  "encoder_-1_1000_" + name + ".smpl.onnx"
         else:
             file_name = "encoder_" + str(n_ctx) + "_" + name + ".onnx"
             torch.onnx.export(self.encoder,
