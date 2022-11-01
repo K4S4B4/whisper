@@ -91,13 +91,15 @@ class MultiHeadAttention(nn.Module):
     def qkv_attention(self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None):
         n_batch, n_ctx, n_state = q.shape
         scale = (n_state // self.n_head) ** -0.25
-        q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
-        k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
-        v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
-        ## this gives the same result. Such reshaping into unknown shape makes the onnx graph dynamic
-        #q = q.view(1, q.shape[1], self.n_head, -1).permute(0, 2, 1, 3) * scale
-        #k = k.view(1, k.shape[1], self.n_head, -1).permute(0, 2, 3, 1) * scale
-        #v = v.view(1, v.shape[1], self.n_head, -1).permute(0, 2, 1, 3)
+
+        #q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
+        #k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
+        #v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
+
+        # this gives the same result. Note that values are selected so that (n_state / self.n_head) = 64
+        q = q.view(1, q.shape[1], self.n_head, 64).permute(0, 2, 1, 3) * scale
+        k = k.view(1, k.shape[1], self.n_head, 64).permute(0, 2, 3, 1) * scale
+        v = v.view(1, v.shape[1], self.n_head, 64).permute(0, 2, 1, 3)
 
         qk = q @ k
         if mask is not None:
@@ -108,7 +110,11 @@ class MultiHeadAttention(nn.Module):
             qk = qk + mask_cat
 
         w = F.softmax(qk.float(), dim=-1).to(q.dtype)
-        return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
+
+        #return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
+
+        x = (w @ v).permute(0, 2, 1, 3)
+        return torch.reshape(x, (1, x.shape[1], self.n_head * 64))
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -519,7 +525,7 @@ class WhisperPreKV(nn.Module):
         super().__init__()
         self.whisper = in_whisper
         self.dims = self.whisper.dims
-        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 1000) #TODO まずはキャッシュやめて動かす
+        self.encoder = AudioEncoder_KvCache(self.whisper.encoder, self.whisper.decoder, 1500, 0) #TODO まずはキャッシュやめて動かす
         self.decoder = TextDecoder_KvCache(self.whisper.decoder, 0, 0, 0)  #TODO まずは動的にn_ctx変えて動かす
         #self.decoder16tkn = TextDecoderPreKv16tkn(self.whisper.decoder)
         #self.decoder1tkn = TextDecoderPreKv1tkn(self.whisper.decoder)
@@ -542,7 +548,7 @@ class WhisperPreKV(nn.Module):
     transcribe = transcribe_function
     decode = decode_function
 
-    def exportOnnxEncoder(self, name, n_ctx: int, isDynamic: bool):
+    def exportOnnxEncoder(self, name, n_ctx: int, isDynamicIn: bool, isDynamicCacheIn: bool):
         device = self.whisper.device
         n_layer = self.dims.n_text_layer
         n_state = self.dims.n_text_state
@@ -563,54 +569,41 @@ class WhisperPreKV(nn.Module):
         input_names = ['mel_t', 'self_k_in', 'self_v_in', 'positions']
         output_names = ['cross_k', 'cross_v', 'self_k_out', 'self_v_out']
 
-        if isDynamic:
-            #file_name = "encoder_-1_" + name + ".onnx"
-            file_name = "encoder_-1_1000_" + name + ".onnx"
-            torch.onnx.export(self.encoder,
-                            inputs,
-                            file_name,
-                            export_params=True,
-                            opset_version=12,
-                            do_constant_folding=True,
-                            input_names=input_names, 
-                            output_names=output_names,
-                            dynamic_axes={
-                                          'mel_t': {1: 'n_mel'},
-                                          'self_k_in': {2: 'n_ctx_cache'},
-                                          'self_v_in': {2: 'n_ctx_cache'},
-                                          'positions': {0: 'n_ctx'},
-                                          'cross_k': {2: 'n_ctx'},
-                                          'cross_v': {2: 'n_ctx'},
-                                          'self_k_out': {2: 'n_ctx'},
-                                          'self_v_out': {2: 'n_ctx'},
-                                          }
-                            #dynamic_axes={'mel_t': [1],
-                            #              'positions': [0],
-                            #              'self_k_in': [2],
-                            #              'self_v_in': [2],
-                            #              'self_k_out': [2],
-                            #              'self_v_out': [2],
-                            #              }
-            )
-            onnx_model = onnx.load(f'{file_name}')
-            onnx_model_simp, check = simplify(onnx_model)
-            #file_name_simp =  "encoder_-1_" + name + ".smpl.onnx"
-            file_name_simp =  "encoder_-1_1000_" + name + ".smpl.onnx"
+        file_base = "encoder_"
+        dynamic_axes = dict()
+
+        if isDynamicIn:
+            file_base += "-1_"
+            dynamic_axes['mel_t'] = {1: 'n_mel'}
+            dynamic_axes['positions'] = {0: 'n_ctx'}
         else:
-            file_name = "encoder_" + str(n_ctx) + "_" + name + ".onnx"
-            torch.onnx.export(self.encoder,
-                            inputs,
-                            file_name,
-                            export_params=True,
-                            opset_version=12,
-                            do_constant_folding=True,
-                            input_names=input_names, 
-                            output_names=output_names
-            )
-            onnx_model = onnx.load(f'{file_name}')
-            onnx_model_simp, check = simplify(onnx_model)
-            file_name_simp =  "encoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
-        onnx.save(onnx_model_simp, f'{file_name_simp}')
+            file_base += str(n_ctx) + "_"
+
+        if isDynamicCacheIn:
+            file_base += "-1_"
+            dynamic_axes['self_k_in'] = {2: 'n_ctx_cache'}
+            dynamic_axes['self_v_in'] = {2: 'n_ctx_cache'}
+        else:
+            file_base += str(n_ctx_cache) + "_"
+
+        file_base += name
+        file_onnx = file_base + ".onnx"
+        file_simp = file_base + "_smpl.onnx"
+
+        torch.onnx.export(self.encoder,
+                        inputs,
+                        file_onnx,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names,
+                        dynamic_axes=dynamic_axes
+        )
+        onnx_model = onnx.load(f'{file_onnx}')
+        onnx_model_simp, check = simplify(onnx_model)
+        onnx.save(onnx_model_simp, f'{file_simp}')
+
 
     def exportOnnxDecoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamic: bool):
         if isDynamic:

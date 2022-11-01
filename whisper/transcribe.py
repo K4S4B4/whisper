@@ -336,17 +336,19 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #model = load_model(model_name)
-    #args = {}
-    #args["language"] = "en"
-    ##args["language"] = "ja"
-    #result = model.transcribe("tests/jfk.flac")
+    model = load_model(model_name)
+    args = {}
+    args["language"] = "en"
+    #args["language"] = "ja"
+    result = model.transcribe("tests/jfk.flac")
+    print(result["text"])
+    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     #print(result["text"])
-    ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
-    ##print(result["text"])
 
-    model = load_model(model_name, device="cpu")
-    model.exportOnnxEncoder(model_name, 256, True)
+    #model = load_model(model_name, device="cpu")
+    #model.exportOnnxEncoder(model_name, 512, False, True)
+    #model.exportOnnxEncoder(model_name, 128, True, False)
+    #model.exportOnnxEncoder(model_name, 512, True, True)
     #model.exportOnnxEncoder(model_name, 256, False)
     #model.exportOnnxDecoder(model_name, 1, 64, True)
     #model.exportOnnxDecoder(model_name, 1, 64, False)
