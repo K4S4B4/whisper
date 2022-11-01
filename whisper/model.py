@@ -605,8 +605,8 @@ class WhisperPreKV(nn.Module):
         onnx.save(onnx_model_simp, f'{file_simp}')
 
 
-    def exportOnnxDecoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamic: bool):
-        if isDynamic:
+    def exportOnnxDecoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamicIn: bool, isDynamicCacheIn: bool):
+        if isDynamicIn:
             self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=0)
         else:
             self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2)
@@ -632,41 +632,74 @@ class WhisperPreKV(nn.Module):
         input_names = ['tokens', 'self_k_in', 'self_v_in', 'cross_k', 'cross_v', 'positions']
         output_names = ['probabilities', 'self_k_out', 'self_v_out']
 
-        if isDynamic:
-            file_name = "decoder_-1_" + name + ".onnx"
-            torch.onnx.export(self.decoderE,
-                            inputs,
-                            file_name,
-                            export_params=True,
-                            opset_version=12,
-                            do_constant_folding=True,
-                            input_names=input_names, 
-                            output_names=output_names,
-                            dynamic_axes={'tokens': {1: 'n_ctx'},
-                                          'positions': {0: 'n_ctx'},
-                                          'self_k_in': {2: 'n_ctx_cache_in'},
-                                          'self_v_in': {2: 'n_ctx_cache_in'},
-                                          'self_k_out': {2: 'n_ctx_cache_out'},
-                                          'self_v_out': {2: 'n_ctx_cache_out'},
-                                          }
-                            )
-            onnx_model = onnx.load(f'{file_name}')
-            onnx_model_simp, check = simplify(onnx_model)
-            file_name_simp =  "decoder_-1_" + name + ".smpl.onnx"
+        #if isDynamic:
+        #    file_name = "decoder_-1_" + name + ".onnx"
+        #    torch.onnx.export(self.decoderE,
+        #                    inputs,
+        #                    file_name,
+        #                    export_params=True,
+        #                    opset_version=12,
+        #                    do_constant_folding=True,
+        #                    input_names=input_names, 
+        #                    output_names=output_names,
+        #                    dynamic_axes={'tokens': {1: 'n_ctx'},
+        #                                  'positions': {0: 'n_ctx'},
+        #                                  'self_k_in': {2: 'n_ctx_cache_in'},
+        #                                  'self_v_in': {2: 'n_ctx_cache_in'}
+        #                                  }
+        #                    )
+        #    onnx_model = onnx.load(f'{file_name}')
+        #    onnx_model_simp, check = simplify(onnx_model)
+        #    file_name_simp =  "decoder_-1_" + name + ".smpl.onnx"
 
+        #else:
+        #    file_name = "decoder_" + str(n_ctx) + "_" + name + ".onnx"
+        #    torch.onnx.export(self.decoderE,
+        #                    inputs,
+        #                    file_name,
+        #                    export_params=True,
+        #                    opset_version=12,
+        #                    do_constant_folding=True,
+        #                    input_names=input_names, 
+        #                    output_names=output_names
+        #                    )
+        #    onnx_model = onnx.load(f'{file_name}')
+        #    onnx_model_simp, check = simplify(onnx_model)
+        #    file_name_simp =  "decoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
+
+        #onnx.save(onnx_model_simp, f'{file_name_simp}')
+
+        file_base = "decoder_"
+        dynamic_axes = dict()
+
+        if isDynamicIn:
+            file_base += "-1_"
+            dynamic_axes['tokens'] = {1: 'n_ctx'}
+            dynamic_axes['positions'] = {0: 'n_ctx'}
         else:
-            file_name = "decoder_" + str(n_ctx) + "_" + name + ".onnx"
-            torch.onnx.export(self.decoderE,
-                            inputs,
-                            file_name,
-                            export_params=True,
-                            opset_version=12,
-                            do_constant_folding=True,
-                            input_names=input_names, 
-                            output_names=output_names
-                            )
-            onnx_model = onnx.load(f'{file_name}')
-            onnx_model_simp, check = simplify(onnx_model)
-            file_name_simp =  "decoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
+            file_base += str(n_ctx) + "_"
 
-        onnx.save(onnx_model_simp, f'{file_name_simp}')
+        if isDynamicCacheIn:
+            file_base += "-1_"
+            dynamic_axes['self_k_in'] = {2: 'n_ctx_cache'}
+            dynamic_axes['self_v_in'] = {2: 'n_ctx_cache'}
+        else:
+            file_base += str(n_ctx_cache) + "_"
+
+        file_base += name
+        file_onnx = file_base + ".onnx"
+        file_simp = file_base + "_smpl.onnx"
+
+        torch.onnx.export(self.decoderE,
+                        inputs,
+                        file_onnx,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names,
+                        dynamic_axes=dynamic_axes
+        )
+        onnx_model = onnx.load(f'{file_onnx}')
+        onnx_model_simp, check = simplify(onnx_model)
+        onnx.save(onnx_model_simp, f'{file_simp}')
