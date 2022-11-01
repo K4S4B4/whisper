@@ -548,12 +548,11 @@ class WhisperPreKV(nn.Module):
     transcribe = transcribe_function
     decode = decode_function
 
-    def exportOnnxEncoder(self, name, n_ctx: int, isDynamicIn: bool, isDynamicCacheIn: bool):
+    def exportOnnxEncoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamicIn: bool, isDynamicCacheIn: bool):
         device = self.whisper.device
         n_layer = self.dims.n_text_layer
         n_state = self.dims.n_text_state
         #n_ctx_cache = 1500 - n_ctx
-        n_ctx_cache = 1000
         n_mel = n_ctx * 2
         offset = 0
         self.encoder.n_ctx = n_ctx

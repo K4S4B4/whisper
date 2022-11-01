@@ -346,9 +346,9 @@ if __name__ == '__main__':
     ##print(result["text"])
 
     model = load_model(model_name, device="cpu")
-    ##model.exportOnnxEncoder(model_name, 512, False, True)
-    ##model.exportOnnxEncoder(model_name, 128, True, False)
-    #model.exportOnnxEncoder(model_name, 512, True, True)
+    model.exportOnnxEncoder(model_name, 250, 1000, False, False) # 250_1000
+    model.exportOnnxEncoder(model_name, 250, 1000, False, True)  # 250_-1
+    model.exportOnnxEncoder(model_name, 250, 1000, True, True)   # -1_-1
     #model.exportOnnxDecoder(model_name, 1, 64, True, True)
-    model.exportOnnxDecoder(model_name, 3, 64, False, False)
+    #model.exportOnnxDecoder(model_name, 3, 64, False, False)
     
