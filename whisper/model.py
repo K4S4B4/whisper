@@ -572,9 +572,16 @@ class WhisperPreKV(nn.Module):
                                           'positions': {0: 'n_ctx'},
                                           'self_k_in': {2: 'n_ctx_cache'},
                                           'self_v_in': {2: 'n_ctx_cache'},
-                                          'self_k_out': {2: 'n_ctx'},
+                                          'self_k_out': {2: 'n_ctx_'},
                                           'self_v_out': {2: 'n_ctx'},
                                           }
+                            #dynamic_axes={'mel_t': [1],
+                            #              'positions': [0],
+                            #              'self_k_in': [2],
+                            #              'self_v_in': [2],
+                            #              'self_k_out': [2],
+                            #              'self_v_out': [2],
+                            #              }
             )
             onnx_model = onnx.load(f'{file_name}')
             onnx_model_simp, check = simplify(onnx_model)
