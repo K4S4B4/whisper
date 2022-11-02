@@ -9,8 +9,8 @@ def execute(modelPath, providers, w, h, optimLevel):
 
 	sess_options = onnxruntime.SessionOptions()
 	#sess_options.enable_profiling = True
-	#sess_options.log_severity_level = 0
-	#sess_options.log_verbosity_level = 1
+	sess_options.log_severity_level = 0
+	sess_options.log_verbosity_level = 1
 	sess_options.graph_optimization_level = optimLevel
 	#sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL
 	#sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL

@@ -348,20 +348,22 @@ if __name__ == '__main__':
     model = load_model(model_name, device="cpu")
 
     #model.exportOnnxEncoder(model_name, 250, 1000, False, False) # 250_1000
-    model.exportOnnxEncoder(model_name, 250, 1000, True, False)  # -1_1000
+    #model.exportOnnxEncoder(model_name, 250, 1000, True, False)  # -1_1000
     #model.exportOnnxEncoder(model_name, 250, 1000, False, True)  # 250_-1
     #model.exportOnnxEncoder(model_name, 250, 1000, True, True)   # -1_-1
 
-    ##model.exportOnnxDecoder(model_name, 1, 64, True, True) # -1_-1 #too slow
+    model.exportOnnxDecoder(model_name, 1, 64, True, True) # -1_-1 
+    #model.exportOnnxDecoder(model_name, 200, 0, False, False) # 200_0
 
     ## self cache strategy
-    #model.exportOnnxDecoder(model_name, 1, 64, True, False) # -1_64
-    #model.exportOnnxDecoder(model_name, 1, 64, False, False) # 1_64
     #model.exportOnnxDecoder(model_name, 1, 64, False, True) # 1_-1
-
+    
     # no self cache strategy
     #model.exportOnnxDecoder(model_name, 64, 0, False, False) # 64_0
     #model.exportOnnxDecoder(model_name, 64, 0, True, False) # -1_0
 
+    # grave
+    ##model.exportOnnxDecoder(model_name, 1, 64, True, False) # -1_64
+    ##model.exportOnnxDecoder(model_name, 1, 64, False, False) # 1_64
 
     
