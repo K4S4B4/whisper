@@ -105,6 +105,10 @@ class MultiHeadAttention(nn.Module):
         if mask is not None:
             #qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
             n_ctx_cache = k.shape[-1] - n_ctx
+
+            #_, _, n_ctx, n_ctx_cache_plus = qk.shape
+            #n_ctx_cache = n_ctx_cache_plus - n_ctx
+
             mask0 = torch.zeros((n_ctx, n_ctx_cache), dtype=q.dtype).to(q.device);
             mask_cat = torch.cat((mask0, mask[:n_ctx, :n_ctx]), dim=1) #(n_ctx, n_ctx_cache + n_ctx)
             qk = qk + mask_cat
@@ -318,8 +322,8 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
     def forward(
         self,
         x: Tensor,
-        self_k_cache: Tensor, #(1, n_ctx_cache, 512)
-        self_v_cache: Tensor, #(1, n_ctx_cache, 512)
+        self_k_cache: Optional[Tensor] = None, #(1, n_ctx_cache, 512)
+        self_v_cache: Optional[Tensor] = None, #(1, n_ctx_cache, 512)
         positions: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
     ):
@@ -328,6 +332,10 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         q = self.multiHeadAttention.query(x)
         k = self.multiHeadAttention.key(x)   #(1, n_ctx, 512)
         v = self.multiHeadAttention.value(x) #(1, n_ctx, 512)
+
+        if self_k_cache is None:
+            wv = self.multiHeadAttention.qkv_attention(q, k, v, mask)
+            return self.multiHeadAttention.out(wv), k, v
 
         if positions is None:
             self_k_cache_appended = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
@@ -475,7 +483,7 @@ class TextDecoder_KvCache(nn.Module):
                 n_layer_cross_k: Tensor, 
                 n_layer_cross_v: Tensor, 
                 #offset: Optional[Tensor] = 0
-                positions: Optional[Tensor] = 0
+                positions: Optional[Tensor] = None
                 ):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
@@ -484,8 +492,10 @@ class TextDecoder_KvCache(nn.Module):
             the encoded audio features to be attended on
         """
 
-        #pos_emb_slice = self.textDecoder.positional_embedding[offset : offset + self.n_ctx] #diff!
-        pos_emb_slice = self.textDecoder.positional_embedding[positions] #diff!
+        if positions is None:
+            pos_emb_slice = self.textDecoder.positional_embedding[0:x.shape[1]] #diff!
+        else:
+            pos_emb_slice = self.textDecoder.positional_embedding[positions] #diff!
 
         x = self.textDecoder.token_embedding(x) + pos_emb_slice #same
         x = x.to(n_layer_cross_k.dtype) #same
@@ -519,6 +529,25 @@ class TextDecoder_KvCache(nn.Module):
         ##TODO get probs for ONNX export!!!
         #probs = F.softmax(logits, dim=-1)
         #return probs, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+
+class TextDecoder_KvCache_NoSelfCache(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder_KvCache, n_layer: int):
+        super().__init__()
+        self.textDecoder_KvCache = in_textDecoder
+
+        self.NoneList = []
+        for i in range(n_layer):
+            self.NoneList.append(None)
+
+    def forward(self, x: Tensor, 
+                n_layer_cross_k: Tensor, 
+                n_layer_cross_v: Tensor, 
+                #offset: Optional[Tensor] = 0
+                positions: Optional[Tensor] = None
+                ):
+
+        x,_,_ = self.textDecoder_KvCache(x, self.NoneList, self.NoneList, n_layer_cross_k, n_layer_cross_v, positions)
+        return x
 
 class WhisperPreKV(nn.Module):
     def __init__(self, in_whisper: Whisper):
@@ -609,6 +638,8 @@ class WhisperPreKV(nn.Module):
             self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=0)
         else:
             self.decoderE = TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2)
+        if n_ctx_cache == 0:
+            self.decoderNoSelfCache = TextDecoder_KvCache_NoSelfCache(self.decoderE, self.dims.n_text_layer)
 
         device = self.whisper.device
         n_state = self.dims.n_text_state
@@ -626,10 +657,20 @@ class WhisperPreKV(nn.Module):
         dummy_offset = torch.tensor(offset, dtype=torch.int64).to(device)
         dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
 
-        inputs = ( dummy_tokens, dummy_self_k, dummy_self_v, dummy_cross_k, dummy_cross_v, dummy_positions )
-
-        input_names = ['tokens', 'self_k_in', 'self_v_in', 'cross_k', 'cross_v', 'positions']
-        output_names = ['probabilities', 'self_k_out', 'self_v_out']
+        if n_ctx_cache == 0:
+            if isDynamicIn:
+                inputs = ( dummy_tokens, dummy_cross_k, dummy_cross_v, dummy_positions )
+                input_names = ['tokens', 'cross_k', 'cross_v', 'positions']
+            else:
+                inputs = ( dummy_tokens, dummy_cross_k, dummy_cross_v )
+                input_names = ['tokens', 'cross_k', 'cross_v']
+            output_names = ['probabilities']
+            decoder = self.decoderNoSelfCache
+        else:
+            inputs = ( dummy_tokens, dummy_self_k, dummy_self_v, dummy_cross_k, dummy_cross_v, dummy_positions )
+            input_names = ['tokens', 'self_k_in', 'self_v_in', 'cross_k', 'cross_v', 'positions']
+            output_names = ['probabilities', 'self_k_out', 'self_v_out']
+            decoder = self.decoderE
 
         #if isDynamic:
         #    file_name = "decoder_-1_" + name + ".onnx"
@@ -689,7 +730,7 @@ class WhisperPreKV(nn.Module):
         file_onnx = file_base + ".onnx"
         file_simp = file_base + "_smpl.onnx"
 
-        torch.onnx.export(self.decoderE,
+        torch.onnx.export(decoder,
                         inputs,
                         file_onnx,
                         export_params=True,
