@@ -64,6 +64,7 @@ def runModels(providers):
     #modelPath = 'encoder_256_-1_base.smpl.onnx'
     #modelPath = 'encoder_-1_1000_base_smpl.onnx'
     modelPath = 'encoder_-1_-1_base_smpl.onnx'
+    modelPath = 'decoder_el_-1_-1_base_smpl.onnx'
     w,h=224,224
     dt = run(modelPath, providers, w, h)
     print("Hand Full", dt)

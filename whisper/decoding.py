@@ -15,6 +15,7 @@ from utils import compression_ratio
 if TYPE_CHECKING:
     from .model import Whisper
 
+import cv2
 
 @torch.no_grad()
 def detect_language(model: "Whisper", mel: Tensor, tokenizer: Tokenizer = None) -> Tuple[Tensor, List[dict]]:
@@ -618,7 +619,7 @@ class DecodingTask:
             cross_v_list = []
             self_k_list = []
             self_v_list = []
-            for i in range(10):
+            for i in range(4):
                 s = (i+0) * 300
                 e = (i+1) * 300
                 offset=s/2
@@ -635,6 +636,16 @@ class DecodingTask:
                 self_v_list.append(n_layer_self_v)
                 n_layer_self_k_cache = torch.cat(self_k_list, dim=2)
                 n_layer_self_v_cache = torch.cat(self_v_list, dim=2)
+
+                for ck in cross_k:
+                    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
+                    cv2.imshow("Enc_xa", xnum)
+                    cv2.waitKey(0)
+                for ck in cross_v:
+                    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
+                    cv2.imshow("Enc_xa", xnum)
+                    cv2.waitKey(0)
+
             k = torch.cat(cross_k_list, dim=2)
             v = torch.cat(cross_v_list, dim=2)
 
