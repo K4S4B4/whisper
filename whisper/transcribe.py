@@ -351,8 +351,9 @@ if __name__ == '__main__':
     #model.exportOnnxEncoder(model_name, 250, 1000, True, False)  # -1_1000
     #model.exportOnnxEncoder(model_name, 250, 1000, False, True)  # 250_-1
     #model.exportOnnxEncoder(model_name, 250, 1000, True, True)   # -1_-1
+    model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
 
-    model.exportOnnxDecoder(model_name, 1, 64, True, True) # -1_-1 
+    #model.exportOnnxDecoder(model_name, 1, 64, True, True) # -1_-1 
     #model.exportOnnxDecoder(model_name, 200, 0, False, False) # 200_0
 
     ## self cache strategy

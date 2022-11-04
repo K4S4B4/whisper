@@ -611,11 +611,13 @@ class DecodingTask:
             #                                                                                  n_layer_self_v_cache_dummy, 
             #                                                                                  offset_tensor)
 
-            n_layer_self_k_cache_dummy = torch.ones((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device) * -1.0*2**8
-            n_layer_self_v_cache_dummy = torch.zeros((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device)
+            n_layer_self_k_cache = torch.ones((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device) * -1.0*2**8
+            n_layer_self_v_cache = torch.zeros((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device)
             self.model.encoder.n_ctx = 150 #n_ctx
-            k_list = []
-            v_list = []
+            cross_k_list = []
+            cross_v_list = []
+            self_k_list = []
+            self_v_list = []
             for i in range(10):
                 s = (i+0) * 300
                 e = (i+1) * 300
@@ -623,16 +625,18 @@ class DecodingTask:
                 #offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
                 positions = torch.arange(offset, offset+self.model.encoder.n_ctx, 1, dtype=torch.int64).to(self.model.device)
                 mel_seg = mel[:,s:e,:]
-                k, v, n_layer_self_k_cache_dummy, n_layer_self_v_cache_dummy = self.model.encoder(mel_seg, 
-                                                                                                  n_layer_self_k_cache_dummy, 
-                                                                                                  n_layer_self_v_cache_dummy, 
+                cross_k, cross_v, n_layer_self_k, n_layer_self_v = self.model.encoder(mel_seg, 
+                                                                                                  n_layer_self_k_cache, 
+                                                                                                  n_layer_self_v_cache, 
                                                                                                   positions)
-                #TODO merge this self-cache and previous self-cache appropriately here!!!
-
-                k_list.append(k)
-                v_list.append(v)
-            k = torch.cat(k_list, dim=2)
-            v = torch.cat(v_list, dim=2)
+                cross_k_list.append(cross_k)
+                cross_v_list.append(cross_v)
+                self_k_list.append(n_layer_self_k)
+                self_v_list.append(n_layer_self_v)
+                n_layer_self_k_cache = torch.cat(self_k_list, dim=2)
+                n_layer_self_v_cache = torch.cat(self_v_list, dim=2)
+            k = torch.cat(cross_k_list, dim=2)
+            v = torch.cat(cross_v_list, dim=2)
 
         #if audio_features.dtype != (torch.float16 if self.options.fp16 else torch.float32):
         if k.dtype != (torch.float16 if self.options.fp16 else torch.float32):

@@ -420,6 +420,10 @@ class AudioEncoder_KvCache(nn.Module):
         """
         print(x.shape)
 
+        #log_spec = torch.clamp(x, min=1e-10).log10() #(80,1100)
+        #log_spec = torch.maximum(log_spec, log_spec.max() - 8.0) #(80,1100)
+        #x = (log_spec + 4.0) / 4.0 #(80,1100)
+
         # pre process
         x = x.permute(0, 2, 1) #diff
 
@@ -465,7 +469,50 @@ class AudioEncoder_KvCache(nn.Module):
         n_layer_cross_k = torch.stack(cross_k_list)
         n_layer_cross_v = torch.stack(cross_v_list)
 
-        return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+        #return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+        return cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list
+
+class AudioEncoder_KvCache_Base(nn.Module):
+    def __init__(self, in_audioEncoder: AudioEncoder_KvCache):
+        super().__init__()
+        self.audioEncoder = in_audioEncoder
+
+    def forward(self, 
+                x: Tensor, 
+                self_k_cache0: Tensor, 
+                self_k_cache1: Tensor, 
+                self_k_cache2: Tensor, 
+                self_k_cache3: Tensor, 
+                self_k_cache4: Tensor, 
+                self_k_cache5: Tensor, 
+                self_v_cache0: Tensor, 
+                self_v_cache1: Tensor, 
+                self_v_cache2: Tensor, 
+                self_v_cache3: Tensor, 
+                self_v_cache4: Tensor, 
+                self_v_cache5: Tensor, 
+                positions: Tensor):
+
+        self_k_list = [
+            self_k_cache0,
+            self_k_cache1,
+            self_k_cache2,
+            self_k_cache3,
+            self_k_cache4,
+            self_k_cache5,
+            ]
+        self_v_list = [
+            self_v_cache0,
+            self_v_cache1,
+            self_v_cache2,
+            self_v_cache3,
+            self_v_cache4,
+            self_v_cache5,
+            ]
+
+        cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list = self.audioEncoder(x, self_k_list, self_v_list, positions)
+
+        return cross_k_list[0],  cross_k_list[1], cross_k_list[2], cross_k_list[3], cross_k_list[4], cross_k_list[5], cross_v_list[0], cross_v_list[1], cross_v_list[2], cross_v_list[3], cross_v_list[4], cross_v_list[5], self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5]
 
 class TextDecoder_KvCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int, cacheReturnRule: int):
@@ -603,7 +650,7 @@ class WhisperPreKV(nn.Module):
         input_names = ['mel_t', 'self_k_in', 'self_v_in', 'positions']
         output_names = ['cross_k', 'cross_v', 'self_k_out', 'self_v_out']
 
-        file_base = "encoder_"
+        file_base = "encoder_norm_"
         dynamic_axes = dict()
 
         if isDynamicIn:
@@ -638,6 +685,78 @@ class WhisperPreKV(nn.Module):
         onnx_model_simp, check = simplify(onnx_model)
         onnx.save(onnx_model_simp, f'{file_simp}')
 
+    def exportOnnxEncoder_EachLayer(self, name, n_ctx: int, n_ctx_cache: int, isDynamicIn: bool, isDynamicCacheIn: bool):
+        device = self.whisper.device
+        n_layer = self.dims.n_text_layer
+        n_state = self.dims.n_text_state
+        #n_ctx_cache = 1500 - n_ctx
+        n_mel = n_ctx * 2
+        offset = 0
+        self.encoder.n_ctx = n_ctx
+        self.encoder_EL = AudioEncoder_KvCache_Base(self.encoder)
+
+        dummy_mel =     torch.randn((1, n_mel, 80), dtype=torch.float32).to(device)
+        dummy_k_cache = torch.randn((1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        dummy_v_cache = torch.randn((1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
+        #dummy_offset =  torch.tensor(offset, dtype=torch.int64).to(device).unsqueeze(0)
+        dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
+
+        #inputs = ( dummy_mel, dummy_k_cache, dummy_v_cache, dummy_offset )
+        inputs = ( dummy_mel, dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache, dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache, dummy_positions )
+
+        input_names = ['mel_t']
+        for i in range(n_layer):
+            input_names.append('self_k_in' + str(i))
+        for i in range(n_layer):
+            input_names.append('self_v_in' + str(i))
+        input_names.append('positions')
+
+        output_names = []
+        for i in range(n_layer):
+            output_names.append('cross_k' + str(i))
+        for i in range(n_layer):
+            output_names.append('cross_v' + str(i))
+        for i in range(n_layer):
+            output_names.append('self_k_out' + str(i))
+        for i in range(n_layer):
+            output_names.append('self_v_out' + str(i))
+
+        file_base = "encoder_el_"
+        dynamic_axes = dict()
+
+        if isDynamicIn:
+            file_base += "-1_"
+            dynamic_axes['mel_t'] = {1: 'n_mel'}
+            dynamic_axes['positions'] = {0: 'n_ctx'}
+        else:
+            file_base += str(n_ctx) + "_"
+
+        if isDynamicCacheIn:
+            file_base += "-1_"
+            for i in range(n_layer):
+                dynamic_axes['self_k_in' + str(i)] = {1: 'n_ctx_cache'}
+            for i in range(n_layer):
+                dynamic_axes['self_v_in' + str(i)] = {1: 'n_ctx_cache'}
+        else:
+            file_base += str(n_ctx_cache) + "_"
+
+        file_base += name
+        file_onnx = file_base + ".onnx"
+        file_simp = file_base + "_smpl.onnx"
+
+        torch.onnx.export(self.encoder_EL,
+                        inputs,
+                        file_onnx,
+                        export_params=True,
+                        opset_version=12,
+                        do_constant_folding=True,
+                        input_names=input_names, 
+                        output_names=output_names,
+                        dynamic_axes=dynamic_axes
+        )
+        onnx_model = onnx.load(f'{file_onnx}')
+        onnx_model_simp, check = simplify(onnx_model)
+        onnx.save(onnx_model_simp, f'{file_simp}')
 
     def exportOnnxDecoder(self, name, n_ctx: int, n_ctx_cache: int, isDynamicIn: bool, isDynamicCacheIn: bool):
         if isDynamicIn:
