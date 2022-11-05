@@ -197,7 +197,9 @@ def transcribe(
 
             timestamp_tokens: torch.Tensor = tokens.ge(tokenizer.timestamp_begin)
             consecutive = torch.where(timestamp_tokens[:-1] & timestamp_tokens[1:])[0].add_(1)
-            if len(consecutive) > 0:  # if the output contains two consecutive timestamp tokens
+
+            #if len(consecutive) > 0:  # if the output contains two consecutive timestamp tokens
+            if False:  # if the output contains two consecutive timestamp tokens
                 last_slice = 0
                 for current_slice in consecutive:
                     sliced_tokens = tokens[last_slice:current_slice]
@@ -336,20 +338,21 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #model = load_model(model_name)
-    #args = {}
-    #args["language"] = "en"
-    ##args["language"] = "ja"
-    #result = model.transcribe("tests/jfk.flac")
+    model = load_model(model_name)
+    args = {}
+    args["language"] = "en"
+    #args["language"] = "ja"
+    result = model.transcribe("tests/jfk.flac")
+    print(result["text"])
+    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     #print(result["text"])
-    ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
-    ##print(result["text"])
 
-    model = load_model(model_name, device="cpu")
+    #model = load_model(model_name, device="cpu")
 
-    #model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
+    ##model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
     #model.exportOnnxDecoder_EachLayer(model_name, 1, 64, True, True)   # -1_-1
-    model.exportOnnxDecoder_EachLayer(model_name, 128, 0, True, False)   # 128_0
+    
+    #model.exportOnnxDecoder_EachLayer(model_name, 128, 0, True, False)   # 128_0
 
     #model.exportOnnxEncoder(model_name, 250, 1000, False, False) # 250_1000
     #model.exportOnnxEncoder(model_name, 250, 1000, True, False)  # -1_1000

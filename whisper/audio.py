@@ -118,10 +118,10 @@ def log_mel_spectrogram(audio: Union[str, np.ndarray, torch.Tensor], n_mels: int
 
     filters = mel_filters(audio.device, n_mels) #(80,201)
     mel_spec = filters @ magnitudes #(80,1100) = (80,201) @ (201,1100)
-
+    
     log_spec = torch.clamp(mel_spec, min=1e-10).log10() #(80,1100)
-    log_spec = torch.maximum(log_spec, log_spec.max() - 8.0) #(80,1100)
-    log_spec = (log_spec + 4.0) / 4.0 #(80,1100)
+    #log_spec = torch.maximum(log_spec, log_spec.max() - 8.0) #(80,1100)
+    #log_spec = (log_spec + 4.0) / 4.0 #(80,1100)
 
     #torch.set_printoptions(edgeitems=100000)
     #print(log_spec, file=codecs.open('log_spec.txt', 'w', 'utf-8'))

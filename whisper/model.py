@@ -421,12 +421,12 @@ class AudioEncoder_KvCache(nn.Module):
         """
         print(x.shape)
 
-        #log_spec = torch.clamp(x, min=1e-10).log10() #(80,1100)
-        #log_spec = torch.maximum(log_spec, log_spec.max() - 8.0) #(80,1100)
-        #x = (log_spec + 4.0) / 4.0 #(80,1100)
-
         # pre process
         x = x.permute(0, 2, 1) #diff
+
+        #x = torch.clamp(x, min=1e-10).log10() #(80,1100)
+        x = torch.maximum(x, x.max() - 8.0) #(80,1100)
+        x = (x + 4.0) / 4.0 #(80,1100)
 
         x = F.gelu(self.audioEncoder.conv1(x)) #same
         x = F.gelu(self.audioEncoder.conv2(x)) #same
@@ -573,17 +573,36 @@ class TextDecoder_KvCache(nn.Module):
         n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
         n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
-        ##TODO slice for ONNX export!!! ここでSliceであってる？
-        x = x[:,-1,:]
-
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
 
-        ##TODO get probs for ONNX export!!!
-        logits = F.softmax(logits, dim=-1)
+        ##############################
+        #logitsTs = logits[:,-1,50364:-1]
+        #probsTs = F.softmax(logitsTs, dim=-1)
+        #maxTs = torch.max(probsTs, dim=-1).values
 
-        #return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
-        return logits, self_k_cache_update_list, self_v_cache_update_list
+        #weightedSum = 0
+        #Sum = 0
+        #for i in range(1500):
+        #    weightedSum += probsTs[0, i] * i
+        #    Sum += probsTs[0, i]
+
+        #maxTs = maxTs.to('cpu').detach().numpy().copy()
+        #weightedSum = weightedSum.to('cpu').detach().numpy().copy()
+        #Sum = Sum.to('cpu').detach().numpy().copy()
+        #print(maxTs, weightedSum, Sum)
+        ##############################
+
+        return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+
+        ##TODO get probs for ONNX export!!!
+        ##TODO slice for ONNX export!!! ここでSliceであってる？
+        x = x[:,-1,:]
+        x = self.textDecoder.ln(x) #same
+        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+        probs = F.softmax(logits, dim=-1)
+        return probs, self_k_cache_update_list, self_v_cache_update_list
+        #return probs, self_k_cache_update_list, self_v_cache_update_list, logits
 
 class TextDecoder_KvCache_Base(nn.Module):
     def __init__(self, in_TextDecoder_KvCache: TextDecoder_KvCache):
@@ -653,9 +672,11 @@ class TextDecoder_KvCache_Base(nn.Module):
             cros_v_cache5,
             ]
 
-        logits, self_k_cache_update_list, self_v_cache_update_list = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
+        probs, self_k_cache_update_list, self_v_cache_update_list = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
+        return probs, self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5]
 
-        return logits, self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5]
+        #probs, self_k_cache_update_list, self_v_cache_update_list, logits = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
+        #return probs, self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5], logits
 
 class TextDecoder_KvCache_NoSelfCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder_KvCache, n_layer: int):
@@ -999,8 +1020,9 @@ class WhisperPreKV(nn.Module):
             output_names.append('self_k_out' + str(i))
         for i in range(n_layer):
             output_names.append('self_v_out' + str(i))
+        #output_names.append('logits')
 
-        file_base = "decoder_el_"
+        file_base = "decoder_el_lp_"
         dynamic_axes = dict()
 
         if isDynamicIn:

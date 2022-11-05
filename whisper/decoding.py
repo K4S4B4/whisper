@@ -637,14 +637,14 @@ class DecodingTask:
                 n_layer_self_k_cache = torch.cat(self_k_list, dim=2)
                 n_layer_self_v_cache = torch.cat(self_v_list, dim=2)
 
-                for ck in cross_k:
-                    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
-                    cv2.imshow("Enc_xa", xnum)
-                    cv2.waitKey(0)
-                for ck in cross_v:
-                    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
-                    cv2.imshow("Enc_xa", xnum)
-                    cv2.waitKey(0)
+                #for ck in cross_k:
+                #    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
+                #    cv2.imshow("Enc_xa", xnum)
+                #    cv2.waitKey(0)
+                #for ck in cross_v:
+                #    xnum = ck.squeeze().to('cpu').detach().numpy().copy().astype(np.float32).transpose()
+                #    cv2.imshow("Enc_xa", xnum)
+                #    cv2.waitKey(0)
 
             k = torch.cat(cross_k_list, dim=2)
             v = torch.cat(cross_v_list, dim=2)
