@@ -470,7 +470,8 @@ class AudioEncoder_KvCache(nn.Module):
         n_layer_cross_k = torch.stack(cross_k_list)
         n_layer_cross_v = torch.stack(cross_v_list)
 
-        return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+        #TODO ONNX export
+        #return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
         return cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list
 
 class AudioEncoder_KvCache_Base(nn.Module):
@@ -514,6 +515,32 @@ class AudioEncoder_KvCache_Base(nn.Module):
         cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list = self.audioEncoder(x, self_k_list, self_v_list, positions)
 
         return cross_k_list[0],  cross_k_list[1], cross_k_list[2], cross_k_list[3], cross_k_list[4], cross_k_list[5], cross_v_list[0], cross_v_list[1], cross_v_list[2], cross_v_list[3], cross_v_list[4], cross_v_list[5], self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5]
+
+class AudioEncoder_KvCache_Small(nn.Module):
+    def __init__(self, in_audioEncoder: AudioEncoder_KvCache):
+        super().__init__()
+        self.audioEncoder = in_audioEncoder
+
+    def forward(self, 
+                x: Tensor, 
+                self_k_cache0: Tensor, 	self_k_cache1: Tensor,	self_k_cache2: Tensor,	self_k_cache3: Tensor,	self_k_cache4: Tensor,	self_k_cache5: Tensor,	self_k_cache6: Tensor,	self_k_cache7: Tensor,	self_k_cache8: Tensor,	self_k_cache9: Tensor,	self_k_cache10: Tensor,	self_k_cache11: Tensor,
+                self_v_cache0: Tensor, 	self_v_cache1: Tensor,	self_v_cache2: Tensor,	self_v_cache3: Tensor,	self_v_cache4: Tensor,	self_v_cache5: Tensor,	self_v_cache6: Tensor,	self_v_cache7: Tensor,	self_v_cache8: Tensor,	self_v_cache9: Tensor,	self_v_cache10: Tensor,	self_v_cache11: Tensor,
+                positions: Tensor):
+        self_k_list = [												
+	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,
+        ]												
+        self_v_list = [												
+	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,
+        ]					
+        
+        cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list = self.audioEncoder(x, self_k_list, self_v_list, positions)
+
+        return (												
+	        cross_k_list[0],	cross_k_list[1],	cross_k_list[2],	cross_k_list[3],	cross_k_list[4],	cross_k_list[5],	cross_k_list[6],	cross_k_list[7],	cross_k_list[8],	cross_k_list[9],	cross_k_list[10],	cross_k_list[11],
+	        cross_v_list[0],	cross_v_list[1],	cross_v_list[2],	cross_v_list[3],	cross_v_list[4],	cross_v_list[5],	cross_v_list[6],	cross_v_list[7],	cross_v_list[8],	cross_v_list[9],	cross_v_list[10],	cross_v_list[11],
+	        self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],
+	        self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],
+        )												
 
 class TextDecoder_KvCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int, cacheReturnRule: int):
@@ -573,30 +600,12 @@ class TextDecoder_KvCache(nn.Module):
         n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
         n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
-        x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-
-        ##############################
-        #logitsTs = logits[:,-1,50364:-1]
-        #probsTs = F.softmax(logitsTs, dim=-1)
-        #maxTs = torch.max(probsTs, dim=-1).values
-
-        #weightedSum = 0
-        #Sum = 0
-        #for i in range(1500):
-        #    weightedSum += probsTs[0, i] * i
-        #    Sum += probsTs[0, i]
-
-        #maxTs = maxTs.to('cpu').detach().numpy().copy()
-        #weightedSum = weightedSum.to('cpu').detach().numpy().copy()
-        #Sum = Sum.to('cpu').detach().numpy().copy()
-        #print(maxTs, weightedSum, Sum)
-        ##############################
-
-        return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
+        ##TODO get probs for ONNX export!!!
+        #x = self.textDecoder.ln(x) #same
+        #logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+        #return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
         ##TODO get probs for ONNX export!!!
-        ##TODO slice for ONNX export!!! ここでSliceであってる？
         x = x[:,-1,:]
         x = self.textDecoder.ln(x) #same
         logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
@@ -677,6 +686,41 @@ class TextDecoder_KvCache_Base(nn.Module):
 
         #probs, self_k_cache_update_list, self_v_cache_update_list, logits = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
         #return probs, self_k_cache_update_list[0], self_k_cache_update_list[1], self_k_cache_update_list[2], self_k_cache_update_list[3], self_k_cache_update_list[4], self_k_cache_update_list[5], self_v_cache_update_list[0], self_v_cache_update_list[1], self_v_cache_update_list[2], self_v_cache_update_list[3], self_v_cache_update_list[4], self_v_cache_update_list[5], logits
+
+class TextDecoder_KvCache_Small(nn.Module):
+    def __init__(self, in_TextDecoder_KvCache: TextDecoder_KvCache):
+        super().__init__()
+        self.textDecoder = in_TextDecoder_KvCache
+
+    def forward(self, 
+                x: Tensor, 
+                self_k_cache0: Tensor, 	self_k_cache1: Tensor,	self_k_cache2: Tensor,	self_k_cache3: Tensor,	self_k_cache4: Tensor,	self_k_cache5: Tensor,	self_k_cache6: Tensor,	self_k_cache7: Tensor,	self_k_cache8: Tensor,	self_k_cache9: Tensor,	self_k_cache10: Tensor,	self_k_cache11: Tensor,
+                self_v_cache0: Tensor, 	self_v_cache1: Tensor,	self_v_cache2: Tensor,	self_v_cache3: Tensor,	self_v_cache4: Tensor,	self_v_cache5: Tensor,	self_v_cache6: Tensor,	self_v_cache7: Tensor,	self_v_cache8: Tensor,	self_v_cache9: Tensor,	self_v_cache10: Tensor,	self_v_cache11: Tensor,
+                cros_k_cache0: Tensor, 	cros_k_cache1: Tensor,	cros_k_cache2: Tensor,	cros_k_cache3: Tensor,	cros_k_cache4: Tensor,	cros_k_cache5: Tensor,	cros_k_cache6: Tensor,	cros_k_cache7: Tensor,	cros_k_cache8: Tensor,	cros_k_cache9: Tensor,	cros_k_cache10: Tensor,	cros_k_cache11: Tensor,
+                cros_v_cache0: Tensor, 	cros_v_cache1: Tensor,	cros_v_cache2: Tensor,	cros_v_cache3: Tensor,	cros_v_cache4: Tensor,	cros_v_cache5: Tensor,	cros_v_cache6: Tensor,	cros_v_cache7: Tensor,	cros_v_cache8: Tensor,	cros_v_cache9: Tensor,	cros_v_cache10: Tensor,	cros_v_cache11: Tensor,
+                positions: Optional[Tensor] = None,
+                mask: Optional[Tensor] = None
+                ):
+
+        self_k_list = [												
+	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,
+        ]												
+        self_v_list = [												
+	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,
+        ]												
+        cros_k_list = [												
+	        cros_k_cache0,	cros_k_cache1,	cros_k_cache2,	cros_k_cache3,	cros_k_cache4,	cros_k_cache5,	cros_k_cache6,	cros_k_cache7,	cros_k_cache8,	cros_k_cache9,	cros_k_cache10,	cros_k_cache11,
+        ]												
+        cros_v_list = [												
+	        cros_v_cache0,	cros_v_cache1,	cros_v_cache2,	cros_v_cache3,	cros_v_cache4,	cros_v_cache5,	cros_v_cache6,	cros_v_cache7,	cros_v_cache8,	cros_v_cache9,	cros_v_cache10,	cros_v_cache11,
+        ]
+
+        probs, self_k_cache_update_list, self_v_cache_update_list = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
+	
+        return (probs,
+	        self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],
+	        self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],
+        )
 
 class TextDecoder_KvCache_NoSelfCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder_KvCache, n_layer: int):
@@ -788,7 +832,6 @@ class WhisperPreKV(nn.Module):
         n_mel = n_ctx * 2
         offset = 0
         self.encoder.n_ctx = n_ctx
-        self.encoder_EL = AudioEncoder_KvCache_Base(self.encoder)
 
         dummy_mel =     torch.randn((1, n_mel, 80), dtype=torch.float32).to(device)
         dummy_k_cache = torch.randn((1, n_ctx_cache, n_state), dtype=torch.float32).to(device)
@@ -796,8 +839,16 @@ class WhisperPreKV(nn.Module):
         #dummy_offset =  torch.tensor(offset, dtype=torch.int64).to(device).unsqueeze(0)
         dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
 
-        #inputs = ( dummy_mel, dummy_k_cache, dummy_v_cache, dummy_offset )
-        inputs = ( dummy_mel, dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache, dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache, dummy_positions )
+        if name == 'base' or name == 'base.en':
+            self.encoder_EL = AudioEncoder_KvCache_Base(self.encoder)
+            inputs = ( dummy_mel, dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache,dummy_k_cache, dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache,dummy_v_cache, dummy_positions )
+
+        if name == 'small' or name == 'small.en':
+            self.encoder_EL = AudioEncoder_KvCache_Small(self.encoder)
+            inputs = (dummy_mel,												
+	            dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,
+	            dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,
+                dummy_positions)												
 
         input_names = ['mel_t']
         for i in range(n_layer):
@@ -816,7 +867,8 @@ class WhisperPreKV(nn.Module):
         for i in range(n_layer):
             output_names.append('self_v_out' + str(i))
 
-        file_base = "encoder_el_"
+        #file_base = "encoder_el_"
+        file_base = "encoder_norm_el_"
         dynamic_axes = dict()
 
         if isDynamicIn:
@@ -899,43 +951,6 @@ class WhisperPreKV(nn.Module):
                 output_names = ['probabilities', 'self_k_out', 'self_v_out']
             decoder = self.decoderE
 
-        #if isDynamic:
-        #    file_name = "decoder_-1_" + name + ".onnx"
-        #    torch.onnx.export(self.decoderE,
-        #                    inputs,
-        #                    file_name,
-        #                    export_params=True,
-        #                    opset_version=12,
-        #                    do_constant_folding=True,
-        #                    input_names=input_names, 
-        #                    output_names=output_names,
-        #                    dynamic_axes={'tokens': {1: 'n_ctx'},
-        #                                  'positions': {0: 'n_ctx'},
-        #                                  'self_k_in': {2: 'n_ctx_cache_in'},
-        #                                  'self_v_in': {2: 'n_ctx_cache_in'}
-        #                                  }
-        #                    )
-        #    onnx_model = onnx.load(f'{file_name}')
-        #    onnx_model_simp, check = simplify(onnx_model)
-        #    file_name_simp =  "decoder_-1_" + name + ".smpl.onnx"
-
-        #else:
-        #    file_name = "decoder_" + str(n_ctx) + "_" + name + ".onnx"
-        #    torch.onnx.export(self.decoderE,
-        #                    inputs,
-        #                    file_name,
-        #                    export_params=True,
-        #                    opset_version=12,
-        #                    do_constant_folding=True,
-        #                    input_names=input_names, 
-        #                    output_names=output_names
-        #                    )
-        #    onnx_model = onnx.load(f'{file_name}')
-        #    onnx_model_simp, check = simplify(onnx_model)
-        #    file_name_simp =  "decoder_" + str(n_ctx) + "_" + name + ".smpl.onnx"
-
-        #onnx.save(onnx_model_simp, f'{file_name_simp}')
-
         file_base = "decoder_"
         dynamic_axes = dict()
 
@@ -974,11 +989,6 @@ class WhisperPreKV(nn.Module):
         onnx.save(onnx_model_simp, f'{file_simp}')
 
     def exportOnnxDecoder_EachLayer(self, name, n_ctx: int, n_ctx_cache: int, isDynamicIn: bool, isDynamicCacheIn: bool):
-        if name == 'base' or name == 'base.en':
-            decoder = TextDecoder_KvCache_Base(
-                TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
-                )
-
         device = self.whisper.device
         n_state = self.dims.n_text_state
         n_layer = self.dims.n_text_layer
@@ -996,12 +1006,27 @@ class WhisperPreKV(nn.Module):
         dummy_positions = torch.arange(offset, offset+n_ctx, 1).to(device)
         dummy_mask = torch.ones(n_ctx, n_ctx).to(device)
 
-        inputs = ( dummy_tokens, 
-                  dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k, 
-                  dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v, 
-                  dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k, 
-                  dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v, 
-                  dummy_positions, dummy_mask )
+        if name == 'base' or name == 'base.en':
+            decoder = TextDecoder_KvCache_Base(
+                TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
+                )
+            inputs = ( dummy_tokens, 
+                      dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k,dummy_self_k, 
+                      dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v,dummy_self_v, 
+                      dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k,dummy_cros_k, 
+                      dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v,dummy_cros_v, 
+                      dummy_positions, dummy_mask )
+
+        if name == 'small' or name == 'small.en':
+            decoder = TextDecoder_KvCache_Small(
+                TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
+                )
+            inputs = ( dummy_tokens, 												
+	            dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,
+	            dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,
+	            dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 
+	            dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 
+                dummy_positions, dummy_mask )												
 
         input_names = ['tokens']
         for i in range(n_layer):
@@ -1022,7 +1047,8 @@ class WhisperPreKV(nn.Module):
             output_names.append('self_v_out' + str(i))
         #output_names.append('logits')
 
-        file_base = "decoder_el_lp_"
+        file_base = "decoder_el_"
+        #file_base = "decoder_el_lp_"
         dynamic_axes = dict()
 
         if isDynamicIn:
@@ -1041,11 +1067,11 @@ class WhisperPreKV(nn.Module):
             for i in range(n_layer):
                 dynamic_axes['self_v_in' + str(i)] = {1: 'n_ctx_cache'}
 
-            file_base += "-1_"
-            for i in range(n_layer):
-                dynamic_axes['cross_k' + str(i)] = {1: 'n_ctx_cache'}
-            for i in range(n_layer):
-                dynamic_axes['cross_v' + str(i)] = {1: 'n_ctx_cache'}
+            #file_base += "-1_"
+            #for i in range(n_layer):
+            #    dynamic_axes['cross_k' + str(i)] = {1: 'n_ctx_cache'}
+            #for i in range(n_layer):
+            #    dynamic_axes['cross_v' + str(i)] = {1: 'n_ctx_cache'}
         else:
             file_base += str(n_ctx_cache) + "_"
 
