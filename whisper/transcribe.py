@@ -330,12 +330,12 @@ if __name__ == '__main__':
     #cli()
     from __init__ import load_model
     #model_name = "tiny"
-    #model_name = "base"
+    model_name = "base"
     #model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"
-    model_name = "small.en"
+    #model_name = "small.en"
     #model_name = "medium.en"
 
     #model = load_model(model_name)
@@ -349,8 +349,12 @@ if __name__ == '__main__':
 
     model = load_model(model_name, device="cpu")
 
-    model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
-    model.exportOnnxDecoder_EachLayer(model_name, 1, 64, True, True)   # -1_-1
+    model.exportOnnxEncoder_orginal(model_name, 1500)   # 1500_0
+
+    #model.exportOnnxEncoder_EachLayer(model_name, 250, 1250, False, False)   # 250_1250
+    #model.exportOnnxDecoder_EachLayer_Static_NoSelfCache(model_name, 64)   # 64_0
+    #model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
+    #model.exportOnnxDecoder_EachLayer(model_name, 1, 64, True, True)   # -1_-1
  
     #model.exportOnnxDecoder_EachLayer(model_name, 128, 0, True, False)   # 128_0
 
