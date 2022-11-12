@@ -94,14 +94,14 @@ class MultiHeadAttention(nn.Module):
         n_batch, n_ctx, n_state = q.shape
         scale = (n_state // self.n_head) ** -0.25
 
-        #q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
-        #k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
-        #v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
+        q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
+        k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
+        v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
 
         # this gives the same result. Note that values are selected so that (n_state / self.n_head) = 64
-        q = q.view(1, q.shape[1], self.n_head, 64).permute(0, 2, 1, 3) * scale
-        k = k.view(1, k.shape[1], self.n_head, 64).permute(0, 2, 3, 1) * scale
-        v = v.view(1, v.shape[1], self.n_head, 64).permute(0, 2, 1, 3)
+        #q = q.view(1, q.shape[1], self.n_head, 64).permute(0, 2, 1, 3) * scale
+        #k = k.view(1, k.shape[1], self.n_head, 64).permute(0, 2, 3, 1) * scale
+        #v = v.view(1, v.shape[1], self.n_head, 64).permute(0, 2, 1, 3)
 
         qk = q @ k
         if mask is not None:
@@ -346,26 +346,31 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
             return self.multiHeadAttention.out(wv), k, v
 
         if positions is None:
-            self_k_cache_appended = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
-            self_v_cache_appended = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
-            wv = self.multiHeadAttention.qkv_attention(q, self_k_cache_appended, self_v_cache_appended, mask)
+            k_before_append = k
+            v_before_append = v
+
+            if self_k_cache is not None:
+                k = torch.cat((self_k_cache, k), 1) #(1, n_ctx_cache + n_ctx, 512)
+                v = torch.cat((self_v_cache, v), 1) #(1, n_ctx_cache + n_ctx, 512)
+
+            wv = self.multiHeadAttention.qkv_attention(q, k, v, mask)
 
             if self.cacheReturnRule == 0: #return just appended cache (n_ctx_cache + n_ctx)
 
-                return self.multiHeadAttention.out(wv), self_k_cache_appended, self_v_cache_appended
+                return self.multiHeadAttention.out(wv), k, v
 
             elif self.cacheReturnRule == 1: #return appended and shrinked to the size of input cache (n_ctx_cache)
 
                 #DONE shrinked to the size of input cache!!!
                 n_ctx_cache = self_k_cache.shape[1]
-                self_k_cache_shrinked = self_k_cache_appended[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
-                self_v_cache_shrinked = self_v_cache_appended[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
+                self_k_cache_shrinked = k[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512). Get last (n_ctx_cache)
+                self_v_cache_shrinked = v[:,n_ctx:n_ctx+n_ctx_cache,:] #(1, n_ctx_cache + n_ctx, 512) -> (1, n_ctx_cache, 512)
             
                 return self.multiHeadAttention.out(wv), self_k_cache_shrinked, self_v_cache_shrinked
 
             elif self.cacheReturnRule == 2: #return only new cache (n_ctx)
 
-                return self.multiHeadAttention.out(wv), k, v
+                return self.multiHeadAttention.out(wv), k_before_append, v_before_append
 
         else: # similar to rule=1, but not append to the last. It overwrites the specified positions of the cache and return whole cache (n_ctx_cache). Meant to use for Encoder with static i/o of kv_cache (1,1500,512) if DirectML input with GPU memory achieved(Plan1)
             self_k_cache[:, positions, :] = k
