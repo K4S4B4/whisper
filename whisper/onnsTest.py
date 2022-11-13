@@ -13,7 +13,8 @@ sess_options.log_severity_level = 0
 sess_options.log_verbosity_level = 1
 
 #model_path = 'decoder_staticLoop_32_64_base.onnx'
-model_path = 'decoder_staticLoop_8_4_base.onnx'
+#model_path = 'decoder_staticLoop_8_4_base.onnx'
+model_path = 'decoder_staticLoop_8_8_base_smpl.onnx'
 
 load_start = time.time()
 session = onnxruntime.InferenceSession(model_path, sess_options, providers)

@@ -4,9 +4,6 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-import onnx
-from onnxsim import simplify
-
 from model import TextDecoder, ResidualAttentionBlock_KvCache
 
 class WhisperSuppresion(nn.Module):
@@ -22,16 +19,17 @@ class WhisperSuppresion(nn.Module):
             self.END_TRANSCRIPT = 50256
             self.TIMESTAMP_BEGIN = 50363
 
-    def select(condition: Tensor, #[n,1], bool
-               val_true: Tensor,  #[n,1]
-               val_false: Tensor  #[n,1]
-               ):
+    def gpu_where(self, 
+                  condition: Tensor, #[n,1], bool
+                  val_true: Tensor,  #[n,1]
+                  val_false: Tensor  #[n,1]
+                  ):
 
         #vals = torch.cat([val_true, val_false], dim=-1)
         #conditioned_vals = vals * condition
 
         val = val_true * condition
-        val += val_false * torch.logical_not(condition)
+        val += val_false * (~condition)
 
         return val
 
@@ -52,14 +50,27 @@ class WhisperSuppresion(nn.Module):
             token_spcl_prob, token_spcl = torch.max(probs[:, self.END_TRANSCRIPT:self.TIMESTAMP_BEGIN ], dim=-1, keepdim=True)
             token_time_prob, token_time = torch.max(probs[:, self.TIMESTAMP_BEGIN:]                    , dim=-1, keepdim=True)
 
-            token_text_or_spcl = torch.where(token_text_prob > token_spcl_prob, token_text, token_spcl)
-            token_spcl_or_time = torch.where(token_spcl_prob > token_time_prob, token_spcl, token_time)
-            token_txt_spcl_tim = torch.where(token_text_prob > token_spcl_prob, 
-                                             torch.where(token_text_prob > token_time_prob, 
+            #token_text_or_spcl = torch.where(token_text_prob > token_spcl_prob, token_text, token_spcl)
+            #token_spcl_or_time = torch.where(token_spcl_prob > token_time_prob, token_spcl, token_time)
+            #token_txt_spcl_tim = torch.where(token_text_prob > token_spcl_prob, 
+            #                                 torch.where(token_text_prob > token_time_prob, 
+            #                                             token_text,
+            #                                             token_time
+            #                                 ),
+            #                                 torch.where(token_spcl_prob > token_time_prob, 
+            #                                             token_spcl,
+            #                                             token_time
+            #                                 )
+            #                    )
+
+            token_text_or_spcl = self.gpu_where(token_text_prob > token_spcl_prob, token_text, token_spcl)
+            token_spcl_or_time = self.gpu_where(token_spcl_prob > token_time_prob, token_spcl, token_time)
+            token_txt_spcl_tim = self.gpu_where(token_text_prob > token_spcl_prob, 
+                                             self.gpu_where(token_text_prob > token_time_prob, 
                                                          token_text,
                                                          token_time
                                              ),
-                                             torch.where(token_spcl_prob > token_time_prob, 
+                                             self.gpu_where(token_spcl_prob > token_time_prob, 
                                                          token_spcl,
                                                          token_time
                                              )
@@ -69,18 +80,35 @@ class WhisperSuppresion(nn.Module):
             timeProbSum = torch.sum(probs[:,  self.TIMESTAMP_BEGIN:], dim=-1)
             #textProbMax = torch.max(probs[:, :self.TIMESTAMP_BEGIN ], dim=-1)
 
-            token = torch.where(last_token >= self.TIMESTAMP_BEGIN,
-                                torch.where(penultimate_token >= self.TIMESTAMP_BEGIN, 
+            #token = torch.where(last_token >= self.TIMESTAMP_BEGIN,
+            #                    torch.where(penultimate_token >= self.TIMESTAMP_BEGIN, 
+            #                                # No time = text or special
+            #                                token_text_or_spcl, 
+            #                                # special or time => sum check
+            #                                torch.where(timeProbSum >= token_text_prob, 
+            #                                            token_time,
+            #                                            token_spcl_or_time
+            #                                            )
+            #                                ), 
+            #                    # text or special or time => sum check
+            #                    torch.where(timeProbSum >= token_text_prob, 
+            #                                token_time,
+            #                                token_txt_spcl_tim
+            #                                )
+            #                    ) 
+
+            token = self.gpu_where(last_token >= self.TIMESTAMP_BEGIN,
+                                self.gpu_where(penultimate_token >= self.TIMESTAMP_BEGIN, 
                                             # No time = text or special
                                             token_text_or_spcl, 
                                             # special or time => sum check
-                                            torch.where(timeProbSum >= token_text_prob, 
+                                            self.gpu_where(timeProbSum >= token_text_prob, 
                                                         token_time,
                                                         token_spcl_or_time
                                                         )
                                             ), 
                                 # text or special or time => sum check
-                                torch.where(timeProbSum >= token_text_prob, 
+                                self.gpu_where(timeProbSum >= token_text_prob, 
                                             token_time,
                                             token_txt_spcl_tim
                                             )
@@ -153,8 +181,16 @@ class TextDecoder_StaticLoop(nn.Module):
         cross_v_list = []
         for block in self.textDecoder.blocks:
             if block.cross_attn:
-                cross_k_list.append(block.cross_attn.key(xa))
-                cross_v_list.append(block.cross_attn.value(xa))
+                #cross_k_list.append(block.cross_attn.key(xa))
+                #cross_v_list.append(block.cross_attn.value(xa))
+                temp_k = block.cross_attn.key(xa)
+                temp_v = block.cross_attn.value(xa)
+                cross_k_list.append(temp_k)
+                cross_v_list.append(temp_v)
+        #n_layer_cross_k = torch.stack(cross_k_list)
+        #n_layer_cross_v = torch.stack(cross_v_list)
+        n_layer_cross_k = cross_k_list
+        n_layer_cross_v = cross_v_list
 
         penultimateToken = None
         lastToken = tokens[:,-1]
@@ -173,8 +209,8 @@ class TextDecoder_StaticLoop(nn.Module):
             x, self_k_cache_updated, self_v_cache_updated = block(x, 
                                                                   self_k_cache = None, 
                                                                   self_v_cache = None,
-                                                                  cross_k = cross_k_list[i], 
-                                                                  cross_v = cross_v_list[i], 
+                                                                  cross_k = n_layer_cross_k[i], 
+                                                                  cross_v = n_layer_cross_v[i], 
                                                                   mask=mask) # diff!
             self_k_list.append(self_k_cache_updated)
             self_v_list.append(self_v_cache_updated)
@@ -199,8 +235,8 @@ class TextDecoder_StaticLoop(nn.Module):
                 x, self_k_cache_updated, self_v_cache_updated = block(x, 
                                                                       self_k_cache = self_k_list[i], 
                                                                       self_v_cache = self_v_list[i],
-                                                                      cross_k = cross_k_list[i], 
-                                                                      cross_v = cross_v_list[i], 
+                                                                      cross_k = n_layer_cross_k[i], 
+                                                                      cross_v = n_layer_cross_v[i], 
                                                                       mask=mask) # diff!
                 self_k_list[i] = self_k_cache_updated #(1, n_ctx_cache + n_ctx, 512)
                 self_v_list[i] = self_v_cache_updated #(1, n_ctx_cache + n_ctx, 512)
@@ -252,29 +288,3 @@ def export_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     onnx_model = onnx.load(f'{file_onnx}')
     onnx_model_simp, check = simplify(onnx_model)
     onnx.save(onnx_model_simp, f'{file_simp}')
-
-
-if __name__ == '__main__':
-    #cli()
-    from __init__ import load_model
-    #model_name = "tiny"
-    model_name = "base"
-    #model_name = "small"
-    #model_name = "medium"
-    #model_name = "tiny.en"
-    #model_name = "base.en"
-    #model_name = "small.en"
-    #model_name = "medium.en"
-
-    #model = load_model(model_name)
-    #args = {}
-    #args["language"] = "en"
-    ##args["language"] = "ja"
-    #result = model.transcribe("tests/jfk.flac")
-    #print(result["text"])
-    ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
-    ##print(result["text"])
-
-    model = load_model(model_name, device="cpu")
-
-    export_TextDecoder_StaticLoop(model_name, model, 32, 64)   # 1500_0
