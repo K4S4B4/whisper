@@ -67,6 +67,7 @@ class MultiHeadAttention(nn.Module):
         self.key = Linear(n_state, n_state, bias=False)
         self.value = Linear(n_state, n_state)
         self.out = Linear(n_state, n_state)
+        self.scale = (n_state // n_head) ** -0.25
 
     def forward(
         self,
@@ -92,16 +93,15 @@ class MultiHeadAttention(nn.Module):
 
     def qkv_attention(self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None):
         n_batch, n_ctx, n_state = q.shape
-        scale = (n_state // self.n_head) ** -0.25
 
-        q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
-        k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
-        v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
+        #q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
+        #k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
+        #v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
 
-        # this gives the same result. Note that values are selected so that (n_state / self.n_head) = 64
-        #q = q.view(1, q.shape[1], self.n_head, 64).permute(0, 2, 1, 3) * scale
-        #k = k.view(1, k.shape[1], self.n_head, 64).permute(0, 2, 3, 1) * scale
-        #v = v.view(1, v.shape[1], self.n_head, 64).permute(0, 2, 1, 3)
+        # this gives the same result. Note that values are selected so that (n_state / n_head) = 64
+        q = q.view(*q.shape[:2], self.n_head, 64).permute(0, 2, 1, 3) * self.scale
+        k = k.view(*k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale
+        v = v.view(*v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
 
         qk = q @ k
         if mask is not None:

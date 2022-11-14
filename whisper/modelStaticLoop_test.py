@@ -80,12 +80,14 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
 
     ###################################################################
     sess_options = onnxruntime.SessionOptions()
-    providers = ['DmlExecutionProvider']
-    #providers = ['CUDAExecutionProvider']
+    #providers = ['DmlExecutionProvider']
+    providers = ['CUDAExecutionProvider']
+    #providers = ['CPUExecutionProvider']
     #sess_options.log_severity_level = 0
     #sess_options.log_verbosity_level = 1
-    sess_options.enable_profiling = True
+    #sess_options.enable_profiling = True
     
+    #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl_opt16.onnx'
     model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
 
@@ -117,8 +119,8 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    model_name = "tiny"
-    #model_name = "base"
+    #model_name = "tiny"
+    model_name = "base"
     #model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
@@ -135,15 +137,18 @@ if __name__ == '__main__':
     ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     ##print(result["text"])
 
-    #model = load_model(model_name, device="cuda")
-    model = load_model(model_name, device="cpu")
+    model = load_model(model_name, device="cuda")
+    #model = load_model(model_name, device="cpu")
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 1)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 2)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 3)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 4)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 16)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 32)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 32)
 
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 4)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 16)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32)

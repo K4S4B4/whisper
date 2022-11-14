@@ -55,39 +55,35 @@ def simplify_TextDecoder_StaticLoop(name, n_ctx_in: int, n_ctx_out: int):
     onnx_model_simp, check = simplify(onnx_model)
     onnx.save(onnx_model_simp, f'{file_simp}')
 
-def executeSimplify():
-    #model_name = "tiny"
-    #model_name = "base"
-    model_name = "small"
-    #model_name = "medium"
-    #model_name = "tiny.en"
-    #model_name = "base.en"
-    #model_name = "small.en"
-    #model_name = "medium.en"
-    
-    simplify_TextDecoder_StaticLoop(model_name, 8, 16)
-    simplify_TextDecoder_StaticLoop(model_name, 8, 32)
+def executeSimplify(model_name):
+    simplify_TextDecoder_StaticLoop(model_name, 8, 2)
+    simplify_TextDecoder_StaticLoop(model_name, 8, 4)
+    simplify_TextDecoder_StaticLoop(model_name, 8, 8)
+    #simplify_TextDecoder_StaticLoop(model_name, 8, 16)
+    #simplify_TextDecoder_StaticLoop(model_name, 8, 32)
 
 
-def executeExport():
+def executeExport(model_name):
     from __init__ import load_model
-    #model_name = "tiny"
-    #model_name = "base"
-    model_name = "small"
-    #model_name = "medium"
-    #model_name = "tiny.en"
-    #model_name = "base.en"
-    #model_name = "small.en"
-    #model_name = "medium.en"
-
     model = load_model(model_name, device="cpu")
 
-    #export_TextDecoder_StaticLoop(model_name, model, 8, 8)
-    export_TextDecoder_StaticLoop(model_name, model, 8, 16)
-    export_TextDecoder_StaticLoop(model_name, model, 8, 32)
-    export_TextDecoder_StaticLoop(model_name, model, 8, 64)
+    export_TextDecoder_StaticLoop(model_name, model, 8, 2)
+    export_TextDecoder_StaticLoop(model_name, model, 8, 4)
+    export_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, 16)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, 64)
     #export_TextDecoder_StaticLoop(model_name, model, 32, 64)
 
 if __name__ == '__main__':
-    #executeExport()
-    executeSimplify()
+    #model_name = "tiny"
+    model_name = "base"
+    #model_name = "small"
+    #model_name = "medium"
+    #model_name = "tiny.en"
+    #model_name = "base.en"
+    #model_name = "small.en"
+    #model_name = "medium.en"
+
+    executeExport(model_name)
+    executeSimplify(model_name)
