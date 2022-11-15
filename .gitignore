@@ -12,3 +12,4 @@ thumbs.db
 .vs/
 *.onnx
 *.json
+*.bak

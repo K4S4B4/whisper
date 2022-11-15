@@ -17,6 +17,9 @@ import onnx
 from onnxsim import simplify
 import cv2
 
+#FOR_ONNX_EXPORT: bool = False
+FOR_ONNX_EXPORT: bool = True
+
 @dataclass
 class ModelDimensions:
     n_mels: int
@@ -33,7 +36,10 @@ class ModelDimensions:
 
 class LayerNorm(nn.LayerNorm):
     def forward(self, x: Tensor) -> Tensor:
-        return super().forward(x.float()).type(x.dtype)
+        if FOR_ONNX_EXPORT:
+            return super().forward(x)
+        else:
+            return super().forward(x.float()).type(x.dtype)
 
 
 class Linear(nn.Linear):
@@ -68,6 +74,7 @@ class MultiHeadAttention(nn.Module):
         self.value = Linear(n_state, n_state)
         self.out = Linear(n_state, n_state)
         self.scale = (n_state // n_head) ** -0.25
+        self.scale2 = (n_state // n_head) ** -0.5
 
     def forward(
         self,
@@ -99,11 +106,11 @@ class MultiHeadAttention(nn.Module):
         #v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
 
         # this gives the same result. Note that values are selected so that (n_state / n_head) = 64
-        q = q.view(*q.shape[:2], self.n_head, 64).permute(0, 2, 1, 3) * self.scale
-        k = k.view(*k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale
+        q = q.view(*q.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)# * self.scale
+        k = k.view(*k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1)# * self.scale
         v = v.view(*v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
 
-        qk = q @ k
+        qk = q @ k * self.scale2
         if mask is not None:
             #qk = qk + mask[:n_ctx, :n_ctx] #これが出てくるのはSelfAttentionのとき。queryのTokenより未来のTokenのkeyを問い合わせてるときは-Infにしてしまう。いや、これ要るのか？未来情報で過去を改善できそうなのだが。
             qk = qk + mask #specify as dynamic input tensor
@@ -115,7 +122,11 @@ class MultiHeadAttention(nn.Module):
             #mask_cat = torch.cat((mask0, mask[:n_ctx, :n_ctx]), dim=1) #(n_ctx, n_ctx_cache + n_ctx)
             #qk = qk + mask_cat
 
-        w = F.softmax(qk.float(), dim=-1).to(q.dtype)
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            w = F.softmax(qk, dim=-1)
+        else:
+            w = F.softmax(qk.float(), dim=-1).to(q.dtype)
 
         #return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
 
@@ -188,9 +199,12 @@ class AudioEncoder(nn.Module):
 
         x = x.permute(0, 2, 1)
 
-
-        assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
-        x = (x + self.positional_embedding).to(x.dtype)
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            x = x + self.positional_embedding
+        else:
+            assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
+            x = (x + self.positional_embedding).to(x.dtype)
 
         for block in self.blocks:
             x = block(x)
@@ -481,9 +495,12 @@ class AudioEncoder_KvCache(nn.Module):
         n_layer_cross_k = torch.stack(cross_k_list)
         n_layer_cross_v = torch.stack(cross_v_list)
 
-        #TODO ONNX export
-        #return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
-        return cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list
+        #ONNX export
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            return cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list
+        else:
+            return n_layer_cross_k, n_layer_cross_v, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
 class AudioEncoder_KvCache_Base(nn.Module):
     def __init__(self, in_audioEncoder: AudioEncoder_KvCache):
@@ -534,24 +551,24 @@ class AudioEncoder_KvCache_Small(nn.Module):
 
     def forward(self, 
                 x: Tensor, 
-                self_k_cache0: Tensor, 	self_k_cache1: Tensor,	self_k_cache2: Tensor,	self_k_cache3: Tensor,	self_k_cache4: Tensor,	self_k_cache5: Tensor,	self_k_cache6: Tensor,	self_k_cache7: Tensor,	self_k_cache8: Tensor,	self_k_cache9: Tensor,	self_k_cache10: Tensor,	self_k_cache11: Tensor,
-                self_v_cache0: Tensor, 	self_v_cache1: Tensor,	self_v_cache2: Tensor,	self_v_cache3: Tensor,	self_v_cache4: Tensor,	self_v_cache5: Tensor,	self_v_cache6: Tensor,	self_v_cache7: Tensor,	self_v_cache8: Tensor,	self_v_cache9: Tensor,	self_v_cache10: Tensor,	self_v_cache11: Tensor,
+                self_k_cache0: Tensor,     self_k_cache1: Tensor,    self_k_cache2: Tensor,    self_k_cache3: Tensor,    self_k_cache4: Tensor,    self_k_cache5: Tensor,    self_k_cache6: Tensor,    self_k_cache7: Tensor,    self_k_cache8: Tensor,    self_k_cache9: Tensor,    self_k_cache10: Tensor,    self_k_cache11: Tensor,
+                self_v_cache0: Tensor,     self_v_cache1: Tensor,    self_v_cache2: Tensor,    self_v_cache3: Tensor,    self_v_cache4: Tensor,    self_v_cache5: Tensor,    self_v_cache6: Tensor,    self_v_cache7: Tensor,    self_v_cache8: Tensor,    self_v_cache9: Tensor,    self_v_cache10: Tensor,    self_v_cache11: Tensor,
                 positions: Tensor):
-        self_k_list = [												
-	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,
-        ]												
-        self_v_list = [												
-	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,
-        ]					
+        self_k_list = [                                                
+            self_k_cache0,    self_k_cache1,    self_k_cache2,    self_k_cache3,    self_k_cache4,    self_k_cache5,    self_k_cache6,    self_k_cache7,    self_k_cache8,    self_k_cache9,    self_k_cache10,    self_k_cache11,
+        ]                                                
+        self_v_list = [                                                
+            self_v_cache0,    self_v_cache1,    self_v_cache2,    self_v_cache3,    self_v_cache4,    self_v_cache5,    self_v_cache6,    self_v_cache7,    self_v_cache8,    self_v_cache9,    self_v_cache10,    self_v_cache11,
+        ]                    
         
         cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list = self.audioEncoder(x, self_k_list, self_v_list, positions)
 
-        return (												
-	        cross_k_list[0],	cross_k_list[1],	cross_k_list[2],	cross_k_list[3],	cross_k_list[4],	cross_k_list[5],	cross_k_list[6],	cross_k_list[7],	cross_k_list[8],	cross_k_list[9],	cross_k_list[10],	cross_k_list[11],
-	        cross_v_list[0],	cross_v_list[1],	cross_v_list[2],	cross_v_list[3],	cross_v_list[4],	cross_v_list[5],	cross_v_list[6],	cross_v_list[7],	cross_v_list[8],	cross_v_list[9],	cross_v_list[10],	cross_v_list[11],
-	        self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],
-	        self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],
-        )												
+        return (                                                
+            cross_k_list[0],    cross_k_list[1],    cross_k_list[2],    cross_k_list[3],    cross_k_list[4],    cross_k_list[5],    cross_k_list[6],    cross_k_list[7],    cross_k_list[8],    cross_k_list[9],    cross_k_list[10],    cross_k_list[11],
+            cross_v_list[0],    cross_v_list[1],    cross_v_list[2],    cross_v_list[3],    cross_v_list[4],    cross_v_list[5],    cross_v_list[6],    cross_v_list[7],    cross_v_list[8],    cross_v_list[9],    cross_v_list[10],    cross_v_list[11],
+            self_k_cache_update_list[0],    self_k_cache_update_list[1],    self_k_cache_update_list[2],    self_k_cache_update_list[3],    self_k_cache_update_list[4],    self_k_cache_update_list[5],    self_k_cache_update_list[6],    self_k_cache_update_list[7],    self_k_cache_update_list[8],    self_k_cache_update_list[9],    self_k_cache_update_list[10],    self_k_cache_update_list[11],
+            self_v_cache_update_list[0],    self_v_cache_update_list[1],    self_v_cache_update_list[2],    self_v_cache_update_list[3],    self_v_cache_update_list[4],    self_v_cache_update_list[5],    self_v_cache_update_list[6],    self_v_cache_update_list[7],    self_v_cache_update_list[8],    self_v_cache_update_list[9],    self_v_cache_update_list[10],    self_v_cache_update_list[11],
+        )                                                
 
 class AudioEncoder_KvCache_Medium(nn.Module):
     def __init__(self, in_audioEncoder: AudioEncoder_KvCache):
@@ -560,25 +577,25 @@ class AudioEncoder_KvCache_Medium(nn.Module):
 
     def forward(self, 
                 x: Tensor, 
-                self_k_cache0: Tensor, 	self_k_cache1: Tensor,	self_k_cache2: Tensor,	self_k_cache3: Tensor,	self_k_cache4: Tensor,	self_k_cache5: Tensor,	self_k_cache6: Tensor,	self_k_cache7: Tensor,	self_k_cache8: Tensor,	self_k_cache9: Tensor,	self_k_cache10: Tensor,	self_k_cache11: Tensor,	self_k_cache12: Tensor,	self_k_cache13: Tensor,	self_k_cache14: Tensor,	self_k_cache15: Tensor,	self_k_cache16: Tensor,	self_k_cache17: Tensor,	self_k_cache18: Tensor,	self_k_cache19: Tensor,	self_k_cache20: Tensor,	self_k_cache21: Tensor,	self_k_cache22: Tensor,	self_k_cache23: Tensor,
-                self_v_cache0: Tensor, 	self_v_cache1: Tensor,	self_v_cache2: Tensor,	self_v_cache3: Tensor,	self_v_cache4: Tensor,	self_v_cache5: Tensor,	self_v_cache6: Tensor,	self_v_cache7: Tensor,	self_v_cache8: Tensor,	self_v_cache9: Tensor,	self_v_cache10: Tensor,	self_v_cache11: Tensor,	self_v_cache12: Tensor,	self_v_cache13: Tensor,	self_v_cache14: Tensor,	self_v_cache15: Tensor,	self_v_cache16: Tensor,	self_v_cache17: Tensor,	self_v_cache18: Tensor,	self_v_cache19: Tensor,	self_v_cache20: Tensor,	self_v_cache21: Tensor,	self_v_cache22: Tensor,	self_v_cache23: Tensor,
+                self_k_cache0: Tensor,     self_k_cache1: Tensor,    self_k_cache2: Tensor,    self_k_cache3: Tensor,    self_k_cache4: Tensor,    self_k_cache5: Tensor,    self_k_cache6: Tensor,    self_k_cache7: Tensor,    self_k_cache8: Tensor,    self_k_cache9: Tensor,    self_k_cache10: Tensor,    self_k_cache11: Tensor,    self_k_cache12: Tensor,    self_k_cache13: Tensor,    self_k_cache14: Tensor,    self_k_cache15: Tensor,    self_k_cache16: Tensor,    self_k_cache17: Tensor,    self_k_cache18: Tensor,    self_k_cache19: Tensor,    self_k_cache20: Tensor,    self_k_cache21: Tensor,    self_k_cache22: Tensor,    self_k_cache23: Tensor,
+                self_v_cache0: Tensor,     self_v_cache1: Tensor,    self_v_cache2: Tensor,    self_v_cache3: Tensor,    self_v_cache4: Tensor,    self_v_cache5: Tensor,    self_v_cache6: Tensor,    self_v_cache7: Tensor,    self_v_cache8: Tensor,    self_v_cache9: Tensor,    self_v_cache10: Tensor,    self_v_cache11: Tensor,    self_v_cache12: Tensor,    self_v_cache13: Tensor,    self_v_cache14: Tensor,    self_v_cache15: Tensor,    self_v_cache16: Tensor,    self_v_cache17: Tensor,    self_v_cache18: Tensor,    self_v_cache19: Tensor,    self_v_cache20: Tensor,    self_v_cache21: Tensor,    self_v_cache22: Tensor,    self_v_cache23: Tensor,
                 positions: Tensor):
 
-        self_k_list = [																								
-	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,	self_k_cache12,	self_k_cache13,	self_k_cache14,	self_k_cache15,	self_k_cache16,	self_k_cache17,	self_k_cache18,	self_k_cache19,	self_k_cache20,	self_k_cache21,	self_k_cache22,	self_k_cache23,
-        ]																								
-        self_v_list = [																								
-	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,	self_v_cache12,	self_v_cache13,	self_v_cache14,	self_v_cache15,	self_v_cache16,	self_v_cache17,	self_v_cache18,	self_v_cache19,	self_v_cache20,	self_v_cache21,	self_v_cache22,	self_v_cache23,
-        ]																								
+        self_k_list = [                                                                                                
+            self_k_cache0,    self_k_cache1,    self_k_cache2,    self_k_cache3,    self_k_cache4,    self_k_cache5,    self_k_cache6,    self_k_cache7,    self_k_cache8,    self_k_cache9,    self_k_cache10,    self_k_cache11,    self_k_cache12,    self_k_cache13,    self_k_cache14,    self_k_cache15,    self_k_cache16,    self_k_cache17,    self_k_cache18,    self_k_cache19,    self_k_cache20,    self_k_cache21,    self_k_cache22,    self_k_cache23,
+        ]                                                                                                
+        self_v_list = [                                                                                                
+            self_v_cache0,    self_v_cache1,    self_v_cache2,    self_v_cache3,    self_v_cache4,    self_v_cache5,    self_v_cache6,    self_v_cache7,    self_v_cache8,    self_v_cache9,    self_v_cache10,    self_v_cache11,    self_v_cache12,    self_v_cache13,    self_v_cache14,    self_v_cache15,    self_v_cache16,    self_v_cache17,    self_v_cache18,    self_v_cache19,    self_v_cache20,    self_v_cache21,    self_v_cache22,    self_v_cache23,
+        ]                                                                                                
         
         cross_k_list, cross_v_list, self_k_cache_update_list, self_v_cache_update_list = self.audioEncoder(x, self_k_list, self_v_list, positions)
 
-        return (																								
-	        cross_k_list[0],	cross_k_list[1],	cross_k_list[2],	cross_k_list[3],	cross_k_list[4],	cross_k_list[5],	cross_k_list[6],	cross_k_list[7],	cross_k_list[8],	cross_k_list[9],	cross_k_list[10],	cross_k_list[11],	cross_k_list[12],	cross_k_list[13],	cross_k_list[14],	cross_k_list[15],	cross_k_list[16],	cross_k_list[17],	cross_k_list[18],	cross_k_list[19],	cross_k_list[20],	cross_k_list[21],	cross_k_list[22],	cross_k_list[23],
-	        cross_v_list[0],	cross_v_list[1],	cross_v_list[2],	cross_v_list[3],	cross_v_list[4],	cross_v_list[5],	cross_v_list[6],	cross_v_list[7],	cross_v_list[8],	cross_v_list[9],	cross_v_list[10],	cross_v_list[11],	cross_v_list[12],	cross_v_list[13],	cross_v_list[14],	cross_v_list[15],	cross_v_list[16],	cross_v_list[17],	cross_v_list[18],	cross_v_list[19],	cross_v_list[20],	cross_v_list[21],	cross_v_list[22],	cross_v_list[23],
-	        self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],	self_k_cache_update_list[12],	self_k_cache_update_list[13],	self_k_cache_update_list[14],	self_k_cache_update_list[15],	self_k_cache_update_list[16],	self_k_cache_update_list[17],	self_k_cache_update_list[18],	self_k_cache_update_list[19],	self_k_cache_update_list[20],	self_k_cache_update_list[21],	self_k_cache_update_list[22],	self_k_cache_update_list[23],
-	        self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],	self_v_cache_update_list[12],	self_v_cache_update_list[13],	self_v_cache_update_list[14],	self_v_cache_update_list[15],	self_v_cache_update_list[16],	self_v_cache_update_list[17],	self_v_cache_update_list[18],	self_v_cache_update_list[19],	self_v_cache_update_list[20],	self_v_cache_update_list[21],	self_v_cache_update_list[22],	self_v_cache_update_list[23],
-        )																								
+        return (                                                                                                
+            cross_k_list[0],    cross_k_list[1],    cross_k_list[2],    cross_k_list[3],    cross_k_list[4],    cross_k_list[5],    cross_k_list[6],    cross_k_list[7],    cross_k_list[8],    cross_k_list[9],    cross_k_list[10],    cross_k_list[11],    cross_k_list[12],    cross_k_list[13],    cross_k_list[14],    cross_k_list[15],    cross_k_list[16],    cross_k_list[17],    cross_k_list[18],    cross_k_list[19],    cross_k_list[20],    cross_k_list[21],    cross_k_list[22],    cross_k_list[23],
+            cross_v_list[0],    cross_v_list[1],    cross_v_list[2],    cross_v_list[3],    cross_v_list[4],    cross_v_list[5],    cross_v_list[6],    cross_v_list[7],    cross_v_list[8],    cross_v_list[9],    cross_v_list[10],    cross_v_list[11],    cross_v_list[12],    cross_v_list[13],    cross_v_list[14],    cross_v_list[15],    cross_v_list[16],    cross_v_list[17],    cross_v_list[18],    cross_v_list[19],    cross_v_list[20],    cross_v_list[21],    cross_v_list[22],    cross_v_list[23],
+            self_k_cache_update_list[0],    self_k_cache_update_list[1],    self_k_cache_update_list[2],    self_k_cache_update_list[3],    self_k_cache_update_list[4],    self_k_cache_update_list[5],    self_k_cache_update_list[6],    self_k_cache_update_list[7],    self_k_cache_update_list[8],    self_k_cache_update_list[9],    self_k_cache_update_list[10],    self_k_cache_update_list[11],    self_k_cache_update_list[12],    self_k_cache_update_list[13],    self_k_cache_update_list[14],    self_k_cache_update_list[15],    self_k_cache_update_list[16],    self_k_cache_update_list[17],    self_k_cache_update_list[18],    self_k_cache_update_list[19],    self_k_cache_update_list[20],    self_k_cache_update_list[21],    self_k_cache_update_list[22],    self_k_cache_update_list[23],
+            self_v_cache_update_list[0],    self_v_cache_update_list[1],    self_v_cache_update_list[2],    self_v_cache_update_list[3],    self_v_cache_update_list[4],    self_v_cache_update_list[5],    self_v_cache_update_list[6],    self_v_cache_update_list[7],    self_v_cache_update_list[8],    self_v_cache_update_list[9],    self_v_cache_update_list[10],    self_v_cache_update_list[11],    self_v_cache_update_list[12],    self_v_cache_update_list[13],    self_v_cache_update_list[14],    self_v_cache_update_list[15],    self_v_cache_update_list[16],    self_v_cache_update_list[17],    self_v_cache_update_list[18],    self_v_cache_update_list[19],    self_v_cache_update_list[20],    self_v_cache_update_list[21],    self_v_cache_update_list[22],    self_v_cache_update_list[23],
+        )                                                                                                
 
 class TextDecoder_KvCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, in_n_ctx: int, in_n_ctx_cache: int, cacheReturnRule: int):
@@ -638,18 +655,18 @@ class TextDecoder_KvCache(nn.Module):
         n_layer_self_k_cache_updated = torch.stack(self_k_cache_update_list)
         n_layer_self_v_cache_updated = torch.stack(self_v_cache_update_list)
 
-        ##TODO get probs for ONNX export!!!
-        #x = self.textDecoder.ln(x) #same
-        #logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-        #return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
-
-        ##TODO get probs for ONNX export!!!
-        x = x[:,-1,:]
-        x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
-        probs = F.softmax(logits, dim=-1)
-        return probs, self_k_cache_update_list, self_v_cache_update_list
-        #return probs, self_k_cache_update_list, self_v_cache_update_list, logits
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            x = x[:,-1,:]
+            x = self.textDecoder.ln(x) #same
+            logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+            probs = F.softmax(logits, dim=-1)
+            return probs, self_k_cache_update_list, self_v_cache_update_list
+            #return probs, self_k_cache_update_list, self_v_cache_update_list, logits
+        else:
+            x = self.textDecoder.ln(x) #same
+            logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+            return logits, n_layer_self_k_cache_updated, n_layer_self_v_cache_updated
 
 class TextDecoder_KvCache_Base(nn.Module):
     def __init__(self, in_TextDecoder_KvCache: TextDecoder_KvCache):
@@ -736,35 +753,35 @@ class TextDecoder_KvCache_Small(nn.Module):
 
     def forward(self, 
                 x: Tensor, 
-                cros_k_cache0: Tensor, 	cros_k_cache1: Tensor,	cros_k_cache2: Tensor,	cros_k_cache3: Tensor,	cros_k_cache4: Tensor,	cros_k_cache5: Tensor,	cros_k_cache6: Tensor,	cros_k_cache7: Tensor,	cros_k_cache8: Tensor,	cros_k_cache9: Tensor,	cros_k_cache10: Tensor,	cros_k_cache11: Tensor,
-                cros_v_cache0: Tensor, 	cros_v_cache1: Tensor,	cros_v_cache2: Tensor,	cros_v_cache3: Tensor,	cros_v_cache4: Tensor,	cros_v_cache5: Tensor,	cros_v_cache6: Tensor,	cros_v_cache7: Tensor,	cros_v_cache8: Tensor,	cros_v_cache9: Tensor,	cros_v_cache10: Tensor,	cros_v_cache11: Tensor,
-                self_k_cache0: Optional[Tensor] = None, 	self_k_cache1: Optional[Tensor] = None,	self_k_cache2: Optional[Tensor] = None,	self_k_cache3: Optional[Tensor] = None,	self_k_cache4: Optional[Tensor] = None,	self_k_cache5: Optional[Tensor] = None,	self_k_cache6: Optional[Tensor] = None,	self_k_cache7: Optional[Tensor] = None,	self_k_cache8: Optional[Tensor] = None,	self_k_cache9: Optional[Tensor] = None,	self_k_cache10: Optional[Tensor] = None,	self_k_cache11: Optional[Tensor] = None,
-                self_v_cache0: Optional[Tensor] = None, 	self_v_cache1: Optional[Tensor] = None,	self_v_cache2: Optional[Tensor] = None,	self_v_cache3: Optional[Tensor] = None,	self_v_cache4: Optional[Tensor] = None,	self_v_cache5: Optional[Tensor] = None,	self_v_cache6: Optional[Tensor] = None,	self_v_cache7: Optional[Tensor] = None,	self_v_cache8: Optional[Tensor] = None,	self_v_cache9: Optional[Tensor] = None,	self_v_cache10: Optional[Tensor] = None,	self_v_cache11: Optional[Tensor] = None,
+                cros_k_cache0: Tensor,     cros_k_cache1: Tensor,    cros_k_cache2: Tensor,    cros_k_cache3: Tensor,    cros_k_cache4: Tensor,    cros_k_cache5: Tensor,    cros_k_cache6: Tensor,    cros_k_cache7: Tensor,    cros_k_cache8: Tensor,    cros_k_cache9: Tensor,    cros_k_cache10: Tensor,    cros_k_cache11: Tensor,
+                cros_v_cache0: Tensor,     cros_v_cache1: Tensor,    cros_v_cache2: Tensor,    cros_v_cache3: Tensor,    cros_v_cache4: Tensor,    cros_v_cache5: Tensor,    cros_v_cache6: Tensor,    cros_v_cache7: Tensor,    cros_v_cache8: Tensor,    cros_v_cache9: Tensor,    cros_v_cache10: Tensor,    cros_v_cache11: Tensor,
+                self_k_cache0: Optional[Tensor] = None,     self_k_cache1: Optional[Tensor] = None,    self_k_cache2: Optional[Tensor] = None,    self_k_cache3: Optional[Tensor] = None,    self_k_cache4: Optional[Tensor] = None,    self_k_cache5: Optional[Tensor] = None,    self_k_cache6: Optional[Tensor] = None,    self_k_cache7: Optional[Tensor] = None,    self_k_cache8: Optional[Tensor] = None,    self_k_cache9: Optional[Tensor] = None,    self_k_cache10: Optional[Tensor] = None,    self_k_cache11: Optional[Tensor] = None,
+                self_v_cache0: Optional[Tensor] = None,     self_v_cache1: Optional[Tensor] = None,    self_v_cache2: Optional[Tensor] = None,    self_v_cache3: Optional[Tensor] = None,    self_v_cache4: Optional[Tensor] = None,    self_v_cache5: Optional[Tensor] = None,    self_v_cache6: Optional[Tensor] = None,    self_v_cache7: Optional[Tensor] = None,    self_v_cache8: Optional[Tensor] = None,    self_v_cache9: Optional[Tensor] = None,    self_v_cache10: Optional[Tensor] = None,    self_v_cache11: Optional[Tensor] = None,
                 positions: Optional[Tensor] = None,
                 mask: Optional[Tensor] = None
                 ):
 
-        self_k_list = [												
-	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,
-        ]												
-        self_v_list = [												
-	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,
-        ]												
-        cros_k_list = [												
-	        cros_k_cache0,	cros_k_cache1,	cros_k_cache2,	cros_k_cache3,	cros_k_cache4,	cros_k_cache5,	cros_k_cache6,	cros_k_cache7,	cros_k_cache8,	cros_k_cache9,	cros_k_cache10,	cros_k_cache11,
-        ]												
-        cros_v_list = [												
-	        cros_v_cache0,	cros_v_cache1,	cros_v_cache2,	cros_v_cache3,	cros_v_cache4,	cros_v_cache5,	cros_v_cache6,	cros_v_cache7,	cros_v_cache8,	cros_v_cache9,	cros_v_cache10,	cros_v_cache11,
+        self_k_list = [                                                
+            self_k_cache0,    self_k_cache1,    self_k_cache2,    self_k_cache3,    self_k_cache4,    self_k_cache5,    self_k_cache6,    self_k_cache7,    self_k_cache8,    self_k_cache9,    self_k_cache10,    self_k_cache11,
+        ]                                                
+        self_v_list = [                                                
+            self_v_cache0,    self_v_cache1,    self_v_cache2,    self_v_cache3,    self_v_cache4,    self_v_cache5,    self_v_cache6,    self_v_cache7,    self_v_cache8,    self_v_cache9,    self_v_cache10,    self_v_cache11,
+        ]                                                
+        cros_k_list = [                                                
+            cros_k_cache0,    cros_k_cache1,    cros_k_cache2,    cros_k_cache3,    cros_k_cache4,    cros_k_cache5,    cros_k_cache6,    cros_k_cache7,    cros_k_cache8,    cros_k_cache9,    cros_k_cache10,    cros_k_cache11,
+        ]                                                
+        cros_v_list = [                                                
+            cros_v_cache0,    cros_v_cache1,    cros_v_cache2,    cros_v_cache3,    cros_v_cache4,    cros_v_cache5,    cros_v_cache6,    cros_v_cache7,    cros_v_cache8,    cros_v_cache9,    cros_v_cache10,    cros_v_cache11,
         ]
 
         probs, self_k_cache_update_list, self_v_cache_update_list = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
-	
+    
         if self_k_cache0 is None:
             return probs
         else:
             return (probs,
-	            self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],
-	            self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],
+                self_k_cache_update_list[0],    self_k_cache_update_list[1],    self_k_cache_update_list[2],    self_k_cache_update_list[3],    self_k_cache_update_list[4],    self_k_cache_update_list[5],    self_k_cache_update_list[6],    self_k_cache_update_list[7],    self_k_cache_update_list[8],    self_k_cache_update_list[9],    self_k_cache_update_list[10],    self_k_cache_update_list[11],
+                self_v_cache_update_list[0],    self_v_cache_update_list[1],    self_v_cache_update_list[2],    self_v_cache_update_list[3],    self_v_cache_update_list[4],    self_v_cache_update_list[5],    self_v_cache_update_list[6],    self_v_cache_update_list[7],    self_v_cache_update_list[8],    self_v_cache_update_list[9],    self_v_cache_update_list[10],    self_v_cache_update_list[11],
             )
 
 class TextDecoder_KvCache_Medium(nn.Module):
@@ -774,36 +791,36 @@ class TextDecoder_KvCache_Medium(nn.Module):
 
     def forward(self, 
                 x: Tensor, 
-                cros_k_cache0: Tensor, 	cros_k_cache1: Tensor,	cros_k_cache2: Tensor,	cros_k_cache3: Tensor,	cros_k_cache4: Tensor,	cros_k_cache5: Tensor,	cros_k_cache6: Tensor,	cros_k_cache7: Tensor,	cros_k_cache8: Tensor,	cros_k_cache9: Tensor,	cros_k_cache10: Tensor,	cros_k_cache11: Tensor,	cros_k_cache12: Tensor,	cros_k_cache13: Tensor,	cros_k_cache14: Tensor,	cros_k_cache15: Tensor,	cros_k_cache16: Tensor,	cros_k_cache17: Tensor,	cros_k_cache18: Tensor,	cros_k_cache19: Tensor,	cros_k_cache20: Tensor,	cros_k_cache21: Tensor,	cros_k_cache22: Tensor,	cros_k_cache23: Tensor,
-                cros_v_cache0: Tensor, 	cros_v_cache1: Tensor,	cros_v_cache2: Tensor,	cros_v_cache3: Tensor,	cros_v_cache4: Tensor,	cros_v_cache5: Tensor,	cros_v_cache6: Tensor,	cros_v_cache7: Tensor,	cros_v_cache8: Tensor,	cros_v_cache9: Tensor,	cros_v_cache10: Tensor,	cros_v_cache11: Tensor,	cros_v_cache12: Tensor,	cros_v_cache13: Tensor,	cros_v_cache14: Tensor,	cros_v_cache15: Tensor,	cros_v_cache16: Tensor,	cros_v_cache17: Tensor,	cros_v_cache18: Tensor,	cros_v_cache19: Tensor,	cros_v_cache20: Tensor,	cros_v_cache21: Tensor,	cros_v_cache22: Tensor,	cros_v_cache23: Tensor,
-                self_k_cache0: Optional[Tensor] = None, 	self_k_cache1: Optional[Tensor] = None,	self_k_cache2: Optional[Tensor] = None,	self_k_cache3: Optional[Tensor] = None,	self_k_cache4: Optional[Tensor] = None,	self_k_cache5: Optional[Tensor] = None,	self_k_cache6: Optional[Tensor] = None,	self_k_cache7: Optional[Tensor] = None,	self_k_cache8: Optional[Tensor] = None,	self_k_cache9: Optional[Tensor] = None,	self_k_cache10: Optional[Tensor] = None,	self_k_cache11: Optional[Tensor] = None,	self_k_cache12: Optional[Tensor] = None,	self_k_cache13: Optional[Tensor] = None,	self_k_cache14: Optional[Tensor] = None,	self_k_cache15: Optional[Tensor] = None,	self_k_cache16: Optional[Tensor] = None,	self_k_cache17: Optional[Tensor] = None,	self_k_cache18: Optional[Tensor] = None,	self_k_cache19: Optional[Tensor] = None,	self_k_cache20: Optional[Tensor] = None,	self_k_cache21: Optional[Tensor] = None,	self_k_cache22: Optional[Tensor] = None,	self_k_cache23: Optional[Tensor] = None,
-                self_v_cache0: Optional[Tensor] = None, 	self_v_cache1: Optional[Tensor] = None,	self_v_cache2: Optional[Tensor] = None,	self_v_cache3: Optional[Tensor] = None,	self_v_cache4: Optional[Tensor] = None,	self_v_cache5: Optional[Tensor] = None,	self_v_cache6: Optional[Tensor] = None,	self_v_cache7: Optional[Tensor] = None,	self_v_cache8: Optional[Tensor] = None,	self_v_cache9: Optional[Tensor] = None,	self_v_cache10: Optional[Tensor] = None,	self_v_cache11: Optional[Tensor] = None,	self_v_cache12: Optional[Tensor] = None,	self_v_cache13: Optional[Tensor] = None,	self_v_cache14: Optional[Tensor] = None,	self_v_cache15: Optional[Tensor] = None,	self_v_cache16: Optional[Tensor] = None,	self_v_cache17: Optional[Tensor] = None,	self_v_cache18: Optional[Tensor] = None,	self_v_cache19: Optional[Tensor] = None,	self_v_cache20: Optional[Tensor] = None,	self_v_cache21: Optional[Tensor] = None,	self_v_cache22: Optional[Tensor] = None,	self_v_cache23: Optional[Tensor] = None,
+                cros_k_cache0: Tensor,     cros_k_cache1: Tensor,    cros_k_cache2: Tensor,    cros_k_cache3: Tensor,    cros_k_cache4: Tensor,    cros_k_cache5: Tensor,    cros_k_cache6: Tensor,    cros_k_cache7: Tensor,    cros_k_cache8: Tensor,    cros_k_cache9: Tensor,    cros_k_cache10: Tensor,    cros_k_cache11: Tensor,    cros_k_cache12: Tensor,    cros_k_cache13: Tensor,    cros_k_cache14: Tensor,    cros_k_cache15: Tensor,    cros_k_cache16: Tensor,    cros_k_cache17: Tensor,    cros_k_cache18: Tensor,    cros_k_cache19: Tensor,    cros_k_cache20: Tensor,    cros_k_cache21: Tensor,    cros_k_cache22: Tensor,    cros_k_cache23: Tensor,
+                cros_v_cache0: Tensor,     cros_v_cache1: Tensor,    cros_v_cache2: Tensor,    cros_v_cache3: Tensor,    cros_v_cache4: Tensor,    cros_v_cache5: Tensor,    cros_v_cache6: Tensor,    cros_v_cache7: Tensor,    cros_v_cache8: Tensor,    cros_v_cache9: Tensor,    cros_v_cache10: Tensor,    cros_v_cache11: Tensor,    cros_v_cache12: Tensor,    cros_v_cache13: Tensor,    cros_v_cache14: Tensor,    cros_v_cache15: Tensor,    cros_v_cache16: Tensor,    cros_v_cache17: Tensor,    cros_v_cache18: Tensor,    cros_v_cache19: Tensor,    cros_v_cache20: Tensor,    cros_v_cache21: Tensor,    cros_v_cache22: Tensor,    cros_v_cache23: Tensor,
+                self_k_cache0: Optional[Tensor] = None,     self_k_cache1: Optional[Tensor] = None,    self_k_cache2: Optional[Tensor] = None,    self_k_cache3: Optional[Tensor] = None,    self_k_cache4: Optional[Tensor] = None,    self_k_cache5: Optional[Tensor] = None,    self_k_cache6: Optional[Tensor] = None,    self_k_cache7: Optional[Tensor] = None,    self_k_cache8: Optional[Tensor] = None,    self_k_cache9: Optional[Tensor] = None,    self_k_cache10: Optional[Tensor] = None,    self_k_cache11: Optional[Tensor] = None,    self_k_cache12: Optional[Tensor] = None,    self_k_cache13: Optional[Tensor] = None,    self_k_cache14: Optional[Tensor] = None,    self_k_cache15: Optional[Tensor] = None,    self_k_cache16: Optional[Tensor] = None,    self_k_cache17: Optional[Tensor] = None,    self_k_cache18: Optional[Tensor] = None,    self_k_cache19: Optional[Tensor] = None,    self_k_cache20: Optional[Tensor] = None,    self_k_cache21: Optional[Tensor] = None,    self_k_cache22: Optional[Tensor] = None,    self_k_cache23: Optional[Tensor] = None,
+                self_v_cache0: Optional[Tensor] = None,     self_v_cache1: Optional[Tensor] = None,    self_v_cache2: Optional[Tensor] = None,    self_v_cache3: Optional[Tensor] = None,    self_v_cache4: Optional[Tensor] = None,    self_v_cache5: Optional[Tensor] = None,    self_v_cache6: Optional[Tensor] = None,    self_v_cache7: Optional[Tensor] = None,    self_v_cache8: Optional[Tensor] = None,    self_v_cache9: Optional[Tensor] = None,    self_v_cache10: Optional[Tensor] = None,    self_v_cache11: Optional[Tensor] = None,    self_v_cache12: Optional[Tensor] = None,    self_v_cache13: Optional[Tensor] = None,    self_v_cache14: Optional[Tensor] = None,    self_v_cache15: Optional[Tensor] = None,    self_v_cache16: Optional[Tensor] = None,    self_v_cache17: Optional[Tensor] = None,    self_v_cache18: Optional[Tensor] = None,    self_v_cache19: Optional[Tensor] = None,    self_v_cache20: Optional[Tensor] = None,    self_v_cache21: Optional[Tensor] = None,    self_v_cache22: Optional[Tensor] = None,    self_v_cache23: Optional[Tensor] = None,
                 positions: Optional[Tensor] = None,
                 mask: Optional[Tensor] = None
                 ):
 
-        self_k_list = [																								
-	        self_k_cache0,	self_k_cache1,	self_k_cache2,	self_k_cache3,	self_k_cache4,	self_k_cache5,	self_k_cache6,	self_k_cache7,	self_k_cache8,	self_k_cache9,	self_k_cache10,	self_k_cache11,	self_k_cache12,	self_k_cache13,	self_k_cache14,	self_k_cache15,	self_k_cache16,	self_k_cache17,	self_k_cache18,	self_k_cache19,	self_k_cache20,	self_k_cache21,	self_k_cache22,	self_k_cache23,
-        ]																								
-        self_v_list = [																								
-	        self_v_cache0,	self_v_cache1,	self_v_cache2,	self_v_cache3,	self_v_cache4,	self_v_cache5,	self_v_cache6,	self_v_cache7,	self_v_cache8,	self_v_cache9,	self_v_cache10,	self_v_cache11,	self_v_cache12,	self_v_cache13,	self_v_cache14,	self_v_cache15,	self_v_cache16,	self_v_cache17,	self_v_cache18,	self_v_cache19,	self_v_cache20,	self_v_cache21,	self_v_cache22,	self_v_cache23,
-        ]																								
-        cros_k_list = [																								
-	        cros_k_cache0,	cros_k_cache1,	cros_k_cache2,	cros_k_cache3,	cros_k_cache4,	cros_k_cache5,	cros_k_cache6,	cros_k_cache7,	cros_k_cache8,	cros_k_cache9,	cros_k_cache10,	cros_k_cache11,	cros_k_cache12,	cros_k_cache13,	cros_k_cache14,	cros_k_cache15,	cros_k_cache16,	cros_k_cache17,	cros_k_cache18,	cros_k_cache19,	cros_k_cache20,	cros_k_cache21,	cros_k_cache22,	cros_k_cache23,
-        ]																								
-        cros_v_list = [																								
-	        cros_v_cache0,	cros_v_cache1,	cros_v_cache2,	cros_v_cache3,	cros_v_cache4,	cros_v_cache5,	cros_v_cache6,	cros_v_cache7,	cros_v_cache8,	cros_v_cache9,	cros_v_cache10,	cros_v_cache11,	cros_v_cache12,	cros_v_cache13,	cros_v_cache14,	cros_v_cache15,	cros_v_cache16,	cros_v_cache17,	cros_v_cache18,	cros_v_cache19,	cros_v_cache20,	cros_v_cache21,	cros_v_cache22,	cros_v_cache23,
-        ]																								
+        self_k_list = [                                                                                                
+            self_k_cache0,    self_k_cache1,    self_k_cache2,    self_k_cache3,    self_k_cache4,    self_k_cache5,    self_k_cache6,    self_k_cache7,    self_k_cache8,    self_k_cache9,    self_k_cache10,    self_k_cache11,    self_k_cache12,    self_k_cache13,    self_k_cache14,    self_k_cache15,    self_k_cache16,    self_k_cache17,    self_k_cache18,    self_k_cache19,    self_k_cache20,    self_k_cache21,    self_k_cache22,    self_k_cache23,
+        ]                                                                                                
+        self_v_list = [                                                                                                
+            self_v_cache0,    self_v_cache1,    self_v_cache2,    self_v_cache3,    self_v_cache4,    self_v_cache5,    self_v_cache6,    self_v_cache7,    self_v_cache8,    self_v_cache9,    self_v_cache10,    self_v_cache11,    self_v_cache12,    self_v_cache13,    self_v_cache14,    self_v_cache15,    self_v_cache16,    self_v_cache17,    self_v_cache18,    self_v_cache19,    self_v_cache20,    self_v_cache21,    self_v_cache22,    self_v_cache23,
+        ]                                                                                                
+        cros_k_list = [                                                                                                
+            cros_k_cache0,    cros_k_cache1,    cros_k_cache2,    cros_k_cache3,    cros_k_cache4,    cros_k_cache5,    cros_k_cache6,    cros_k_cache7,    cros_k_cache8,    cros_k_cache9,    cros_k_cache10,    cros_k_cache11,    cros_k_cache12,    cros_k_cache13,    cros_k_cache14,    cros_k_cache15,    cros_k_cache16,    cros_k_cache17,    cros_k_cache18,    cros_k_cache19,    cros_k_cache20,    cros_k_cache21,    cros_k_cache22,    cros_k_cache23,
+        ]                                                                                                
+        cros_v_list = [                                                                                                
+            cros_v_cache0,    cros_v_cache1,    cros_v_cache2,    cros_v_cache3,    cros_v_cache4,    cros_v_cache5,    cros_v_cache6,    cros_v_cache7,    cros_v_cache8,    cros_v_cache9,    cros_v_cache10,    cros_v_cache11,    cros_v_cache12,    cros_v_cache13,    cros_v_cache14,    cros_v_cache15,    cros_v_cache16,    cros_v_cache17,    cros_v_cache18,    cros_v_cache19,    cros_v_cache20,    cros_v_cache21,    cros_v_cache22,    cros_v_cache23,
+        ]                                                                                                
 
         probs, self_k_cache_update_list, self_v_cache_update_list = self.textDecoder(x, self_k_list, self_v_list, cros_k_list, cros_v_list, positions, mask)
-	
+    
         if self_k_cache0 is None:
             return probs
         else:
-            return (probs,																								
-	            self_k_cache_update_list[0],	self_k_cache_update_list[1],	self_k_cache_update_list[2],	self_k_cache_update_list[3],	self_k_cache_update_list[4],	self_k_cache_update_list[5],	self_k_cache_update_list[6],	self_k_cache_update_list[7],	self_k_cache_update_list[8],	self_k_cache_update_list[9],	self_k_cache_update_list[10],	self_k_cache_update_list[11],	self_k_cache_update_list[12],	self_k_cache_update_list[13],	self_k_cache_update_list[14],	self_k_cache_update_list[15],	self_k_cache_update_list[16],	self_k_cache_update_list[17],	self_k_cache_update_list[18],	self_k_cache_update_list[19],	self_k_cache_update_list[20],	self_k_cache_update_list[21],	self_k_cache_update_list[22],	self_k_cache_update_list[23],
-	            self_v_cache_update_list[0],	self_v_cache_update_list[1],	self_v_cache_update_list[2],	self_v_cache_update_list[3],	self_v_cache_update_list[4],	self_v_cache_update_list[5],	self_v_cache_update_list[6],	self_v_cache_update_list[7],	self_v_cache_update_list[8],	self_v_cache_update_list[9],	self_v_cache_update_list[10],	self_v_cache_update_list[11],	self_v_cache_update_list[12],	self_v_cache_update_list[13],	self_v_cache_update_list[14],	self_v_cache_update_list[15],	self_v_cache_update_list[16],	self_v_cache_update_list[17],	self_v_cache_update_list[18],	self_v_cache_update_list[19],	self_v_cache_update_list[20],	self_v_cache_update_list[21],	self_v_cache_update_list[22],	self_v_cache_update_list[23],
-            )																								
+            return (probs,                                                                                                
+                self_k_cache_update_list[0],    self_k_cache_update_list[1],    self_k_cache_update_list[2],    self_k_cache_update_list[3],    self_k_cache_update_list[4],    self_k_cache_update_list[5],    self_k_cache_update_list[6],    self_k_cache_update_list[7],    self_k_cache_update_list[8],    self_k_cache_update_list[9],    self_k_cache_update_list[10],    self_k_cache_update_list[11],    self_k_cache_update_list[12],    self_k_cache_update_list[13],    self_k_cache_update_list[14],    self_k_cache_update_list[15],    self_k_cache_update_list[16],    self_k_cache_update_list[17],    self_k_cache_update_list[18],    self_k_cache_update_list[19],    self_k_cache_update_list[20],    self_k_cache_update_list[21],    self_k_cache_update_list[22],    self_k_cache_update_list[23],
+                self_v_cache_update_list[0],    self_v_cache_update_list[1],    self_v_cache_update_list[2],    self_v_cache_update_list[3],    self_v_cache_update_list[4],    self_v_cache_update_list[5],    self_v_cache_update_list[6],    self_v_cache_update_list[7],    self_v_cache_update_list[8],    self_v_cache_update_list[9],    self_v_cache_update_list[10],    self_v_cache_update_list[11],    self_v_cache_update_list[12],    self_v_cache_update_list[13],    self_v_cache_update_list[14],    self_v_cache_update_list[15],    self_v_cache_update_list[16],    self_v_cache_update_list[17],    self_v_cache_update_list[18],    self_v_cache_update_list[19],    self_v_cache_update_list[20],    self_v_cache_update_list[21],    self_v_cache_update_list[22],    self_v_cache_update_list[23],
+            )                                                                                                
 
 class TextDecoder_KvCache_NoSelfCache(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder_KvCache, n_layer: int):
@@ -928,17 +945,17 @@ class WhisperPreKV(nn.Module):
 
         if name == 'small' or name == 'small.en':
             self.encoder_EL = AudioEncoder_KvCache_Small(self.encoder)
-            inputs = (dummy_mel,												
-	            dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,
-	            dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,
-                dummy_positions)												
+            inputs = (dummy_mel,                                                
+                dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,
+                dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,
+                dummy_positions)                                                
 
         if name == 'medium' or name == 'medium.en':
             self.encoder_EL = AudioEncoder_KvCache_Medium(self.encoder)
-            inputs = (dummy_mel,																								
-	            dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,	dummy_k_cache,
-	            dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,	dummy_v_cache,
-                dummy_positions)																								
+            inputs = (dummy_mel,                                                                                                
+                dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,    dummy_k_cache,
+                dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,    dummy_v_cache,
+                dummy_positions)                                                                                                
 
         input_names = ['mel_t']
         for i in range(n_layer):
@@ -1111,23 +1128,23 @@ class WhisperPreKV(nn.Module):
             decoder = TextDecoder_KvCache_Small(
                 TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
                 )
-            inputs = ( dummy_tokens, 												
-	            dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 
-	            dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 
-	            dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,
-	            dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,
-                dummy_positions, dummy_mask )												
+            inputs = ( dummy_tokens,                                                 
+                dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k, 
+                dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v, 
+                dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,
+                dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,
+                dummy_positions, dummy_mask )                                                
 
         if name == 'medium' or name == 'medium.en':
             decoder = TextDecoder_KvCache_Medium(
                 TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
                 )
-            inputs = ( dummy_tokens, 																								
-	            dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 
-	            dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 
-	            dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,	dummy_self_k,
-	            dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,	dummy_self_v,
-                dummy_positions, dummy_mask )																								
+            inputs = ( dummy_tokens,                                                                                                 
+                dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k, 
+                dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v, 
+                dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,    dummy_self_k,
+                dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,    dummy_self_v,
+                dummy_positions, dummy_mask )                                                                                                
 
         input_names = ['tokens']
         for i in range(n_layer):
@@ -1225,18 +1242,18 @@ class WhisperPreKV(nn.Module):
             decoder = TextDecoder_KvCache_Small(
                 TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
                 )
-            inputs = ( dummy_tokens, 												
-	            dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 
-	            dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 
+            inputs = ( dummy_tokens,                                                 
+                dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k, 
+                dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v, 
                 )
 
         if name == 'medium' or name == 'medium.en':
             decoder = TextDecoder_KvCache_Medium(
                 TextDecoder_KvCache(self.whisper.decoder, n_ctx, n_ctx_cache, cacheReturnRule=2) #return only new cache (n_ctx)
                 )
-            inputs = ( dummy_tokens, 																								
-	            dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 	dummy_cros_k, 
-	            dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 	dummy_cros_v, 
+            inputs = ( dummy_tokens,                                                                                                 
+                dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k,     dummy_cros_k, 
+                dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v,     dummy_cros_v, 
                 )
 
         input_names = ['tokens']
