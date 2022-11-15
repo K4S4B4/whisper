@@ -17,8 +17,8 @@ import onnx
 from onnxsim import simplify
 import cv2
 
-#FOR_ONNX_EXPORT: bool = False
-FOR_ONNX_EXPORT: bool = True
+FOR_ONNX_EXPORT: bool = False
+#FOR_ONNX_EXPORT: bool = True
 
 @dataclass
 class ModelDimensions:
