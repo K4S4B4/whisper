@@ -349,9 +349,9 @@ if __name__ == '__main__':
 
     model = load_model(model_name, device="cpu")
 
-    model.exportOnnxEncoder_orginal(model_name, 1500)   # 1500_0
+    #model.exportOnnxEncoder_orginal(model_name, 1500)   # 1500_0
 
-    #model.exportOnnxEncoder_EachLayer(model_name, 250, 1250, False, False)   # 250_1250
+    model.exportOnnxEncoder_EachLayer(model_name, 250, 1250, False, False)   # 250_1250
     #model.exportOnnxDecoder_EachLayer_Static_NoSelfCache(model_name, 64)   # 64_0
     #model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
     #model.exportOnnxDecoder_EachLayer(model_name, 1, 64, True, True)   # -1_-1

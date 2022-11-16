@@ -57,8 +57,8 @@ def simplify_TextDecoder_StaticLoop(name, n_ctx_in: int, n_ctx_out: int):
 
 def executeSimplify(model_name):
     simplify_TextDecoder_StaticLoop(model_name, 8, 2)
-    simplify_TextDecoder_StaticLoop(model_name, 8, 4)
-    simplify_TextDecoder_StaticLoop(model_name, 8, 8)
+    #simplify_TextDecoder_StaticLoop(model_name, 8, 4)
+    #simplify_TextDecoder_StaticLoop(model_name, 8, 8)
     #simplify_TextDecoder_StaticLoop(model_name, 8, 16)
     #simplify_TextDecoder_StaticLoop(model_name, 8, 32)
 
@@ -68,8 +68,8 @@ def executeExport(model_name):
     model = load_model(model_name, device="cpu")
 
     export_TextDecoder_StaticLoop(model_name, model, 8, 2)
-    export_TextDecoder_StaticLoop(model_name, model, 8, 4)
-    export_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 16)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 32)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 64)
@@ -85,5 +85,5 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    executeExport(model_name)
+    #executeExport(model_name)
     executeSimplify(model_name)

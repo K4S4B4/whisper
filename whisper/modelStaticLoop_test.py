@@ -64,6 +64,7 @@ def testTorch_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
 
     inference_start = time.time()
     out_audio_feature = encoder(mel_t)
+    #print(out_audio_feature[0,0,0])
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
 def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
@@ -100,30 +101,31 @@ def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
     }
     inference_start = time.time()
     audio_feature = session.run(None, ort_inputs)
+    #print(out_audio_feature[0][0,0,0])
     print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
     ###################################################################
 
-    xa = audio_feature[0].squeeze(0).transpose()
-    cv2.imshow("Enc_xa", xa)
-    cv2.waitKey(1)
+    #xa = audio_feature[0].squeeze(0).transpose()
+    #cv2.imshow("Enc_xa", xa)
+    #cv2.waitKey(1)
 
-    # decode
-    ###################################################################
-    isMultilingual = not name.endswith('en')
-    tokenizer = get_tokenizer(multilingual=isMultilingual)
-    in_tokens = gen_tokens(isMultilingual, tokenizer, 8).to(model.whisper.device)
-    decoder = TextDecoder_StaticLoop(model.whisper.decoder, 32, isMultilingual)
+    ## decode
+    ####################################################################
+    #isMultilingual = not name.endswith('en')
+    #tokenizer = get_tokenizer(multilingual=isMultilingual)
+    #in_tokens = gen_tokens(isMultilingual, tokenizer, 8).to(model.whisper.device)
+    #decoder = TextDecoder_StaticLoop(model.whisper.decoder, 32, isMultilingual)
 
-    audio_feature = torch.from_numpy(audio_feature[0].astype(np.float32)).clone().to(model.whisper.device)
-    out_tokens = decoder(in_tokens, audio_feature)
+    #audio_feature = torch.from_numpy(audio_feature[0].astype(np.float32)).clone().to(model.whisper.device)
+    #out_tokens = decoder(in_tokens, audio_feature)
 
-    out_token_list = []
-    for i in range(32):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
+    #out_token_list = []
+    #for i in range(32):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
 
-    print("PyTorch:", text)
-    ###################################################################
+    #print("PyTorch:", text)
+    ####################################################################
 
 def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     isMultilingual = not name.endswith('en')
@@ -200,8 +202,8 @@ if __name__ == '__main__':
     #cli()
     from __init__ import load_model
     #model_name = "tiny"
-    #model_name = "base"
-    model_name = "small"
+    model_name = "base"
+    #model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"
@@ -229,9 +231,9 @@ if __name__ == '__main__':
 
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 4)
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 16)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32)
 
-    testOnnx_AudioEncoder(model_name, model, 1500, 0)
-    testTorch_AudioEncoder(model_name, model, 1500, 0)
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    #testTorch_AudioEncoder(model_name, model, 1500, 0)

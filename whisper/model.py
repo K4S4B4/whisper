@@ -17,8 +17,8 @@ import onnx
 from onnxsim import simplify
 import cv2
 
-FOR_ONNX_EXPORT: bool = False
-#FOR_ONNX_EXPORT: bool = True
+#FOR_ONNX_EXPORT: bool = False
+FOR_ONNX_EXPORT: bool = True
 
 @dataclass
 class ModelDimensions:
@@ -324,6 +324,25 @@ class MultiHeadAttention_CrossKvCache(nn.Module):
         super().__init__()
         self.multiHeadAttention = in_multiHeadAttention
 
+    def qkv_attention_cross(self, q: Tensor, k_t: Tensor, v_t: Tensor, mask: Optional[Tensor] = None):
+        # this gives the same result. Note that values are selected so that (n_state / n_head) = 64
+        q = q.view(*q.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)# * self.scale
+        k = k_t
+        v = v_t
+
+        qk = q @ k * self.multiHeadAttention.scale2
+
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            w = F.softmax(qk, dim=-1)
+        else:
+            w = F.softmax(qk.float(), dim=-1).to(q.dtype)
+
+        #return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
+
+        x = (w @ v).permute(0, 2, 1, 3)
+        return torch.reshape(x, (*x.shape[:2], self.multiHeadAttention.n_head * 64))
+
     def forward(
         self,
         x: Tensor,
@@ -332,7 +351,11 @@ class MultiHeadAttention_CrossKvCache(nn.Module):
         mask: Optional[Tensor] = None,
     ):
         q = self.multiHeadAttention.query(x)
-        wv = self.multiHeadAttention.qkv_attention(q, cross_k, cross_v, mask)
+        if cross_v.shape[-1] == 64:
+            # if k, v reshape and permute are precomputed
+            wv = self.qkv_attention_cross(q, cross_k, cross_v, mask)
+        else:
+            wv = self.multiHeadAttention.qkv_attention(q, cross_k, cross_v, mask)
         return self.multiHeadAttention.out(wv)
 
 class MultiHeadAttention_SelfKvCache(nn.Module):

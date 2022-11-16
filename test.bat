@@ -1,0 +1,1 @@
+C:\Users\AkiyaSouken\miniconda3\envs\whispdev1\python.exe D:\GitHub\whisper\whisper\modelStaticLoop_test.py
