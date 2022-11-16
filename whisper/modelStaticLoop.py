@@ -232,6 +232,7 @@ class TextDecoder_StaticLoop(nn.Module):
         super().__init__()
         self.textDecoder = in_textDecoder
         self.n_head = in_textDecoder.blocks[0].cross_attn.n_head
+        self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
         #self.n_ctx_in = n_ctx_in
         self.n_ctx_out = n_ctx_out
         self.greedyDecoder = GreedyDecoder(in_textDecoder, isMultilingual)
@@ -259,7 +260,7 @@ class TextDecoder_StaticLoop(nn.Module):
                 #cross_v_list.append(block.cross_attn.value(xa))
                 cross_k = block.cross_attn.key(xa)
                 cross_v = block.cross_attn.value(xa)
-                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1)
+                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
                 cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
                 cross_k_list.append(cross_k)
                 cross_v_list.append(cross_v)

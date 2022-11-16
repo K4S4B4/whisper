@@ -330,7 +330,7 @@ class MultiHeadAttention_CrossKvCache(nn.Module):
         k = k_t
         v = v_t
 
-        qk = q @ k * self.multiHeadAttention.scale2
+        qk = q @ k #* self.multiHeadAttention.scale2
 
         #global FOR_ONNX_EXPORT
         if FOR_ONNX_EXPORT:

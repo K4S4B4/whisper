@@ -85,5 +85,5 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #executeExport(model_name)
+    executeExport(model_name)
     executeSimplify(model_name)
