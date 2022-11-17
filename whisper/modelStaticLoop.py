@@ -64,9 +64,11 @@ class WhisperSuppresion(nn.Module):
             token_text_prob, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
             timeProbSum        = torch.sum(probs[:, self.TIMESTAMP_BEGIN:], dim=-1, keepdim=True) #[n,1]
 
+            is_last_timestamp = last_token >= self.TIMESTAMP_BEGIN
+            is_penultimate_timestamp = penultimate_token >= self.TIMESTAMP_BEGIN
             probs += self.SUPPRESS_SYMBOLS__
-            probs += (self.SUPPRESS_TIMESTAMP * last_token >= self.TIMESTAMP_BEGIN) * penultimate_token >= self.TIMESTAMP_BEGIN
-            probs += (self.SUPPRESS_ORDINARY_ * last_token >= self.TIMESTAMP_BEGIN) * penultimate_token <  self.TIMESTAMP_BEGIN
+            probs += self.SUPPRESS_TIMESTAMP * (is_last_timestamp * is_penultimate_timestamp)
+            probs += self.SUPPRESS_ORDINARY_ * (is_last_timestamp * ~is_penultimate_timestamp)
             probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum >= token_text_prob)
             #token = torch.argmax(probs, dim=-1, keepdim=True)
             _, token = torch.topk(probs, k=1, dim=-1)
@@ -228,7 +230,7 @@ class GreedyDecoder(nn.Module):
         return token
 
 class TextDecoder_StaticLoop(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool):
+    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool):
         super().__init__()
         self.textDecoder = in_textDecoder
         self.n_head = in_textDecoder.blocks[0].cross_attn.n_head
@@ -236,10 +238,11 @@ class TextDecoder_StaticLoop(nn.Module):
         #self.n_ctx_in = n_ctx_in
         self.n_ctx_out = n_ctx_out
         self.greedyDecoder = GreedyDecoder(in_textDecoder, isMultilingual)
+        self.makeOnnxAttentionPastPresent = makeOnnxAttentionPastPresent
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) # return appended self cache
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) 
 
     def forward(self, tokens: Tensor, 
                 xa: Tensor
@@ -289,6 +292,15 @@ class TextDecoder_StaticLoop(nn.Module):
                                                                   cross_k = n_layer_cross_k[i], 
                                                                   cross_v = n_layer_cross_v[i], 
                                                                   mask=mask) # diff!
+
+            if self.makeOnnxAttentionPastPresent: # ONNX Attention Node I/O = past/present
+                k_t = self_k_cache_updated.view(*self_k_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                v_t = self_v_cache_updated.view(*self_v_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                self_kv_stack = torch.stack([k_t, v_t], dim=0)
+                k_t = self_kv_stack[0].permute(0, 2, 1, 3)
+                v_t = self_kv_stack[1].permute(0, 2, 1, 3)
+                self_k_cache_updated = torch.reshape(k_t, (*k_t.shape[:2], self.n_head * 64))
+                self_v_cache_updated = torch.reshape(v_t, (*v_t.shape[:2], self.n_head * 64))
             self_k_list.append(self_k_cache_updated)
             self_v_list.append(self_v_cache_updated)
             i += 1
@@ -315,6 +327,14 @@ class TextDecoder_StaticLoop(nn.Module):
                                                                       cross_k = n_layer_cross_k[i], 
                                                                       cross_v = n_layer_cross_v[i], 
                                                                       mask=mask) # diff!
+                if self.makeOnnxAttentionPastPresent: # ONNX Attention Node I/O = past/present
+                    k_t = self_k_cache_updated.view(*self_k_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                    v_t = self_v_cache_updated.view(*self_v_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                    self_kv_stack = torch.stack([k_t, v_t], dim=0)
+                    k_t = self_kv_stack[0].permute(0, 2, 1, 3)
+                    v_t = self_kv_stack[1].permute(0, 2, 1, 3)
+                    self_k_cache_updated = torch.reshape(k_t, (*k_t.shape[:2], self.n_head * 64))
+                    self_v_cache_updated = torch.reshape(v_t, (*v_t.shape[:2], self.n_head * 64))
                 self_k_list[i] = self_k_cache_updated #(1, n_ctx_cache + n_ctx, 512)
                 self_v_list[i] = self_v_cache_updated #(1, n_ctx_cache + n_ctx, 512)
                 i += 1

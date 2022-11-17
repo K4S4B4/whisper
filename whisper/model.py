@@ -364,6 +364,23 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         self.multiHeadAttention = in_multiHeadAttention
         self.cacheReturnRule = in_cacheReturnRule
 
+    def qkv_attention_self(self, q: Tensor, k_t: Tensor, v_t: Tensor, mask: Optional[Tensor] = None):
+        # this gives the same result. Note that values are selected so that (n_state / n_head) = 64
+        q = q.view(*q.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)
+        k = k_t.permute(0, 1, 3, 2)
+        v = v_t
+
+        qk = q @ k * self.multiHeadAttention.scale2
+
+        #global FOR_ONNX_EXPORT
+        if FOR_ONNX_EXPORT:
+            w = F.softmax(qk, dim=-1)
+        else:
+            w = F.softmax(qk.float(), dim=-1).to(q.dtype)
+
+        x = (w @ v).permute(0, 2, 1, 3)
+        return torch.reshape(x, (*x.shape[:2], self.multiHeadAttention.n_head * 64))
+
     def forward(
         self,
         x: Tensor,
@@ -377,6 +394,15 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         q = self.multiHeadAttention.query(x)
         k = self.multiHeadAttention.key(x)   #(1, n_ctx, 512)
         v = self.multiHeadAttention.value(x) #(1, n_ctx, 512)
+
+        if self.cacheReturnRule == 3: #return present (1, 8, n_ctx, 64) for Attention node of ONNX contrib com.microsft
+            k_t = k.view(*k.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)
+            v_t = v.view(*v.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)
+            if self_k_cache is not None:
+                k_t = torch.cat((self_k_cache, k_t), 2) #(1, 8, n_ctx_cache + n_ctx, 64)
+                v_t = torch.cat((self_v_cache, v_t), 2) #(1, 8, n_ctx_cache + n_ctx, 64)
+            wv = self.qkv_attention_self(q, k_t, v_t, mask)
+            return self.multiHeadAttention.out(wv), k_t, v_t
 
         if self_k_cache is None:
             wv = self.multiHeadAttention.qkv_attention(q, k, v, mask)

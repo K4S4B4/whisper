@@ -127,7 +127,7 @@ def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
     #print("PyTorch:", text)
     ####################################################################
 
-def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
+def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, makeOnnxAttentionPastPresent: bool):
     isMultilingual = not name.endswith('en')
     tokenizer = get_tokenizer(multilingual=isMultilingual)
     audio_feature = gen_audio_feature(model).to(model.whisper.device)
@@ -135,7 +135,7 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int)
     audio_feature_zeros = gen_audio_feature_zeros(model)
     in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
 
-    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual)
+    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
 
     # warm up
     for k in range(5):
@@ -169,8 +169,10 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     #sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
     
+    model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl_opt16.onnx'
-    model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
+    #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
 
     load_start = time.time()
@@ -202,8 +204,8 @@ if __name__ == '__main__':
     #cli()
     from __init__ import load_model
     #model_name = "tiny"
-    model_name = "base"
-    #model_name = "small"
+    #model_name = "base"
+    model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"
@@ -228,12 +230,21 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 16)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 32)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 2)
 
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 3, False)
+
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
+
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, False)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 4)
-    testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 16)
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
     #testOnnx_AudioEncoder(model_name, model, 1500, 0)
     #testTorch_AudioEncoder(model_name, model, 1500, 0)
