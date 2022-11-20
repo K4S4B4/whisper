@@ -21,9 +21,11 @@ def gen_mel(model):
     mel = log_mel_spectrogram(audio_path).unsqueeze(0)
     mel_t = mel.permute(0, 2, 1)
 
-    n_pad = 3000 - mel_t.shape[1]
+    n_pad_before = 500
+    n_pad = 3000 - mel_t.shape[1] - n_pad_before
+    pad_before = torch.zeros(1,n_pad_before,80)
     pad = torch.zeros(1,n_pad,80)
-    mel_t = torch.cat([mel_t, pad], dim=1).to(model.whisper.device)
+    mel_t = torch.cat([pad_before, mel_t, pad], dim=1).to(model.whisper.device)
     return mel_t
 
 def gen_audio_feature(model):
@@ -36,19 +38,34 @@ def gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in: int):
 
 def gen_tokens(isMultilingual, tokenizer, n_ctx_in: int):
     in_tokens = torch.ones((1, n_ctx_in), dtype=torch.int64)
+    #if isMultilingual:
+    #    in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
+    #    in_tokens[:,n_ctx_in-2] = 50359
+    #    in_tokens[:,n_ctx_in-3] = 50259
+    #    in_tokens[:,n_ctx_in-4] = tokenizer.sot
+    #    in_tokens[:,n_ctx_in-5] = tokenizer.timestamp_begin + 1499
+    #    in_tokens[:,n_ctx_in-6] = tokenizer.timestamp_begin + 1499
+    #    in_tokens[:,0] = tokenizer.sot_prev
+    #else:
+    #    in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
+    #    in_tokens[:,n_ctx_in-2] = tokenizer.sot
+    #    in_tokens[:,n_ctx_in-3] = tokenizer.timestamp_begin + 1499
+    #    in_tokens[:,n_ctx_in-4] = tokenizer.timestamp_begin + 1499
+    #    in_tokens[:,0] = tokenizer.sot_prev
+
     if isMultilingual:
-        in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
-        in_tokens[:,n_ctx_in-2] = 50359
-        in_tokens[:,n_ctx_in-3] = 50259
-        in_tokens[:,n_ctx_in-4] = tokenizer.sot
+        #in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
+        in_tokens[:,n_ctx_in-1] = 50359
+        in_tokens[:,n_ctx_in-2] = 50259
+        in_tokens[:,n_ctx_in-3] = tokenizer.sot
+        in_tokens[:,n_ctx_in-4] = tokenizer.timestamp_begin + 1499
         in_tokens[:,n_ctx_in-5] = tokenizer.timestamp_begin + 1499
-        in_tokens[:,n_ctx_in-6] = tokenizer.timestamp_begin + 1499
         in_tokens[:,0] = tokenizer.sot_prev
     else:
-        in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
-        in_tokens[:,n_ctx_in-2] = tokenizer.sot
+        #in_tokens[:,n_ctx_in-1] = tokenizer.timestamp_begin
+        in_tokens[:,n_ctx_in-1] = tokenizer.sot
+        in_tokens[:,n_ctx_in-2] = tokenizer.timestamp_begin + 1499
         in_tokens[:,n_ctx_in-3] = tokenizer.timestamp_begin + 1499
-        in_tokens[:,n_ctx_in-4] = tokenizer.timestamp_begin + 1499
         in_tokens[:,0] = tokenizer.sot_prev
     return in_tokens
 
@@ -150,6 +167,7 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
         out_token_list.append(out_tokens[0, i])
     text = tokenizer.decode(out_token_list)
 
+    print("PyTorch:", out_token_list[0] - tokenizer.timestamp_begin)
     print("PyTorch:", text)
 
 def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
@@ -238,11 +256,11 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
-    testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
 
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
@@ -252,5 +270,5 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
-    testOnnx_AudioEncoder(model_name, model, 1500, 0)
-    testTorch_AudioEncoder(model_name, model, 1500, 0)
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    #testTorch_AudioEncoder(model_name, model, 1500, 0)

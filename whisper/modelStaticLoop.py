@@ -55,7 +55,11 @@ class WhisperSuppresion(nn.Module):
                 penultimate_token: Tensor #[n,1]   
                 ):
 
-        if penultimate_token is None:
+        if last_token is None:
+            _, token = torch.topk(probs[:, self.END_TRANSCRIPT:], k=1, dim=-1)
+            token += self.END_TRANSCRIPT
+
+        elif penultimate_token is None:
             probs += self.SUPPRESS_SYMBOLS__
             #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
             _, token = torch.topk(probs, k=1, dim=-1)
@@ -275,7 +279,8 @@ class TextDecoder_StaticLoop(nn.Module):
         n_layer_cross_v = cross_v_list
 
         penultimateToken = None
-        lastToken = tokens[:,-1]
+        #lastToken = tokens[:,-1]
+        lastToken = None
         ############ First itr
 
         mask = self.textDecoder.mask[:tokens.shape[1], :tokens.shape[1]]
