@@ -325,33 +325,24 @@ def cli():
         with open(os.path.join(output_dir, audio_basename + ".srt"), "w", encoding="utf-8") as srt:
             write_srt(result["segments"], file=srt)
 
-
-if __name__ == '__main__':
-    #cli()
+def model_execute(model_name):
     from __init__ import load_model
-    #model_name = "tiny"
-    model_name = "base"
-    #model_name = "small"
-    #model_name = "medium"
-    #model_name = "tiny.en"
-    #model_name = "base.en"
-    #model_name = "small.en"
-    #model_name = "medium.en"
-
-    #model = load_model(model_name)
-    #args = {}
-    #args["language"] = "en"
-    ##args["language"] = "ja"
-    #result = model.transcribe("tests/jfk.flac")
+    model = load_model(model_name)
+    args = {}
+    args["language"] = "en"
+    #args["language"] = "ja"
+    result = model.transcribe("tests/jfk.flac")
+    print(result["text"])
+    #result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     #print(result["text"])
-    ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
-    ##print(result["text"])
 
+def model_export(model_name):
+    from __init__ import load_model
     model = load_model(model_name, device="cpu")
 
-    #model.exportOnnxEncoder_orginal(model_name, 1500)   # 1500_0
+    model.exportOnnxEncoder_orginal(model_name, 1500)   # 1500_0
 
-    model.exportOnnxEncoder_EachLayer(model_name, 250, 1250, False, False)   # 250_1250
+    #model.exportOnnxEncoder_EachLayer(model_name, 250, 1250, False, False)   # 250_1250
     #model.exportOnnxDecoder_EachLayer_Static_NoSelfCache(model_name, 64)   # 64_0
     #model.exportOnnxEncoder_EachLayer(model_name, 250, 1000, True, True)   # -1_-1
     #model.exportOnnxDecoder_EachLayer(model_name, 1, 64, True, True)   # -1_-1
@@ -378,3 +369,24 @@ if __name__ == '__main__':
     ##model.exportOnnxDecoder(model_name, 1, 64, False, False) # 1_64
 
     
+if __name__ == '__main__':
+
+    #model_name = "tiny"
+    #model_name = "base"
+    #model_name = "small"
+    #model_name = "medium"
+    #model_name = "tiny.en"
+    #model_name = "base.en"
+    #model_name = "small.en"
+    #model_name = "medium.en"
+
+    #model_execute(model_name)
+
+    #model_export("tiny")
+    model_export("base")
+    #model_export("small")
+    #model_export("medium")
+    model_export("tiny.en")
+    model_export("base.en")
+    model_export("small.en")
+    model_export("medium.en")

@@ -253,6 +253,8 @@ class TextDecoder_StaticLoop(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
+        xa = xa.float()
+
         out_token_list = []
 
         cross_k_list = []
@@ -348,40 +350,3 @@ class TextDecoder_StaticLoop(nn.Module):
 
         out_tokens = torch.cat(out_token_list, dim=-1)
         return out_tokens
-
-def export_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
-    isMultilingual = not name.endswith('en')
-    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual)
-    device = model.whisper.device
-    n_state = model.whisper.dims.n_text_state
-    n_layer = model.whisper.dims.n_text_layer
-
-    token_list = []
-    for i in range(n_ctx_in):
-        token_list.append(torch.tensor(i, dtype=torch.int64).to(device))
-    dummy_tokens = torch.stack(token_list).unsqueeze(0)
-    dummy_audioFeature = torch.randn((1, 1500, n_state), dtype=torch.float32).to(device)
-
-    inputs = ( dummy_tokens, dummy_audioFeature )
-    input_names = ['in_tokens', 'audio_feature']
-    output_names = ['out_tokens']
-
-    file_base = "decoder_staticLoop_"
-    file_base += str(n_ctx_in) + "_"
-    file_base += str(n_ctx_out) + "_"
-    file_base += name
-    file_onnx = file_base + ".onnx"
-    file_simp = file_base + "_smpl.onnx"
-
-    torch.onnx.export(decoder,
-                    inputs,
-                    file_onnx,
-                    export_params=True,
-                    opset_version=12,
-                    do_constant_folding=True,
-                    input_names=input_names, 
-                    output_names=output_names
-    )
-    onnx_model = onnx.load(f'{file_onnx}')
-    onnx_model_simp, check = simplify(onnx_model)
-    onnx.save(onnx_model_simp, f'{file_simp}')

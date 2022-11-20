@@ -33,6 +33,26 @@ class ModelDimensions:
     n_text_head: int
     n_text_layer: int
 
+def getDims(model_name):
+    dims = ModelDimensions()
+    if model_name.startswith("tiny"):
+        dims.n_audio_state = 384
+        dims.n_audio_layer = 8
+    if model_name.startswith("base"):
+        dims.n_audio_state = 512
+        dims.n_audio_layer = 12
+    if model_name.startswith("small"):
+        dims.n_audio_state = 768
+        dims.n_audio_layer = 24
+    if model_name.startswith("medium"):
+        dims.n_audio_state = 1024
+        dims.n_audio_layer = 48
+    dims.n_mels = 3000
+    dims.n_audio_ctx = 1500
+    dims.n_text_state = dims.n_audio_state
+    dims.n_text_layer = dims.n_audio_layer
+    dims.n_text_head = int(dims.n_text_state / 64)
+    dims.n_audio_head = int(dims.n_audio_state / 64)
 
 class LayerNorm(nn.LayerNorm):
     def forward(self, x: Tensor) -> Tensor:
@@ -1367,5 +1387,5 @@ class WhisperPreKV(nn.Module):
                         output_names=output_names
         )
         onnx_model = onnx.load(f'{file_onnx}')
-        onnx_model_simp, check = simplify(onnx_model)
-        onnx.save(onnx_model_simp, f'{file_simp}')
+        #onnx_model_simp, check = simplify(onnx_model)
+        #onnx.save(onnx_model_simp, f'{file_simp}')

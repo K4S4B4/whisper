@@ -235,8 +235,14 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 3, False)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
-    testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
+
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+
+    #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
 
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
@@ -246,5 +252,5 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
-    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
-    #testTorch_AudioEncoder(model_name, model, 1500, 0)
+    testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    testTorch_AudioEncoder(model_name, model, 1500, 0)
