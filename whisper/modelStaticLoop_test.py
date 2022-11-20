@@ -139,10 +139,19 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
 
     # warm up
     for k in range(5):
-        out_tokens = decoder(in_tokens_zeros, audio_feature_zeros)
+        out_tokens, out_conf = decoder(in_tokens_zeros, audio_feature_zeros)
+
+        out_token_list = []
+        for i in range(n_ctx_out):
+            out_token_list.append(out_tokens[0, i])
+        text = tokenizer.decode(out_token_list)
+
+        print("Conf ave:", out_conf)
+        print("PyTorch:", text)
+
 
     inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
+    out_tokens, out_conf = decoder(in_tokens, audio_feature)
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
     out_token_list = []
@@ -150,6 +159,7 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
         out_token_list.append(out_tokens[0, i])
     text = tokenizer.decode(out_token_list)
 
+    print("Conf ave:", out_conf)
     print("PyTorch:", text)
 
 def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
@@ -238,7 +248,7 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
     testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
@@ -252,5 +262,5 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
-    testOnnx_AudioEncoder(model_name, model, 1500, 0)
-    testTorch_AudioEncoder(model_name, model, 1500, 0)
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    #testTorch_AudioEncoder(model_name, model, 1500, 0)

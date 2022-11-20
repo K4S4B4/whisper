@@ -58,7 +58,7 @@ class WhisperSuppresion(nn.Module):
         if penultimate_token is None:
             probs += self.SUPPRESS_SYMBOLS__
             #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
-            _, token = torch.topk(probs, k=1, dim=-1)
+            return torch.topk(probs, k=1, dim=-1)
 
         else:
             token_text_prob, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
@@ -71,9 +71,7 @@ class WhisperSuppresion(nn.Module):
             probs += self.SUPPRESS_ORDINARY_ * (is_last_timestamp * ~is_penultimate_timestamp)
             probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum >= token_text_prob)
             #token = torch.argmax(probs, dim=-1, keepdim=True)
-            _, token = torch.topk(probs, k=1, dim=-1)
-
-        return token
+            return torch.topk(probs, k=1, dim=-1)
 
     def forward3(self, probs: Tensor, #[n,51865]
                 last_token: Tensor, #[n,1]
@@ -83,7 +81,7 @@ class WhisperSuppresion(nn.Module):
         if penultimate_token is None:
             probs += self.SUPPRESS_SYMBOLS__
             #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
-            _, token = torch.topk(probs[:, :self.TIMESTAMP_BEGIN], k=1, dim=-1)
+            conf, token = torch.topk(probs[:, :self.TIMESTAMP_BEGIN], k=1, dim=-1)
 
         else:
             #probs += self.SUPPRESS_SYMBOLS__
@@ -101,9 +99,9 @@ class WhisperSuppresion(nn.Module):
             probs += suppression
 
             #token = torch.argmax(probs, dim=-1, keepdim=True)
-            _, token = torch.topk(probs, k=1, dim=-1)
+            conf, token = torch.topk(probs, k=1, dim=-1)
 
-        return token
+        return conf, token
 
     def forward(self, probs: Tensor, #[1,51865]
                 last_token: Tensor, #[1,1]
@@ -223,11 +221,11 @@ class GreedyDecoder(nn.Module):
         #[1,51865]
 
         #token = self.suppressor(probs, last_token, penultimate_token) #supression
-        token = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
+        conf, token = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
         #token = self.suppressor.forward3(probs, last_token, penultimate_token) #supression
 
         #x = torch.argmax(probs, dim=-1) #greedy
-        return token
+        return conf, token
 
 class TextDecoder_StaticLoop(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool):
@@ -256,6 +254,7 @@ class TextDecoder_StaticLoop(nn.Module):
         xa = xa.float()
 
         out_token_list = []
+        out_confs_list = []
 
         cross_k_list = []
         cross_v_list = []
@@ -307,8 +306,9 @@ class TextDecoder_StaticLoop(nn.Module):
             self_v_list.append(self_v_cache_updated)
             i += 1
         
-        token = self.greedyDecoder(x, lastToken, penultimateToken) #token=[1,1]
+        conf, token = self.greedyDecoder(x, lastToken, penultimateToken) #token=[1,1]
         out_token_list.append(token)
+        out_confs_list.append(conf)
 
         penultimateToken = lastToken
         lastToken = token
@@ -341,12 +341,15 @@ class TextDecoder_StaticLoop(nn.Module):
                 self_v_list[i] = self_v_cache_updated #(1, n_ctx_cache + n_ctx, 512)
                 i += 1
 
-            token = self.greedyDecoder(x, lastToken, penultimateToken)
+            conf, token = self.greedyDecoder(x, lastToken, penultimateToken)
             out_token_list.append(token)
+            out_confs_list.append(conf)
 
             penultimateToken = lastToken
             lastToken = token
             position = position + 1
 
         out_tokens = torch.cat(out_token_list, dim=-1)
-        return out_tokens
+        out_confs = torch.cat(out_confs_list, dim=-1)
+        #out_conf_ave = torch.mean(out_confs, dim=-1)
+        return out_tokens, out_confs

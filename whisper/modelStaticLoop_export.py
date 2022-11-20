@@ -22,7 +22,7 @@ def export_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, ma
     input_names = ['in_tokens', 'audio_feature']
     output_names = ['out_tokens']
 
-    file_base = "decoder_sl_a16_"
+    file_base = "decoder_sl_a16_cf_"
     file_base += str(n_ctx_in) + "_"
     file_base += str(n_ctx_out) + "_"
     file_base += name
