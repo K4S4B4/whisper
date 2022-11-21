@@ -20,10 +20,12 @@ def gen_mel(model):
     mel = log_mel_spectrogram(audio_path).unsqueeze(0)
     mel_t = mel.permute(0, 2, 1)
 
-    n_pad = 3000 - mel_t.shape[1]
+    n_pad_l = 1000
+    n_pad = 3000 - mel_t.shape[1] - n_pad_l
+    pad_l = torch.zeros(1,n_pad_l,80)
     pad = torch.zeros(1,n_pad,80)
     #mel_t = torch.cat([mel_t, pad], dim=1).to(model.whisper.device)
-    mel_t = torch.cat([pad, mel_t], dim=1).to(model.whisper.device)
+    mel_t = torch.cat([pad_l, mel_t, pad], dim=1).to(model.whisper.device)
     return mel_t
 
 def gen_audio_feature(model):
@@ -81,7 +83,7 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
 
     # warm up
     for k in range(3):
-        out_tokens = decoder(in_tokens_zeros, audio_feature_zeros)
+        out_tokens, out_positions = decoder(in_tokens_zeros, audio_feature_zeros)
 
 
     #audio_feature = audio_feature[:, 1260:, :]
@@ -97,116 +99,118 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
 
     #print("PyTorch:", text)
 
+    #audio_feature = audio_feature[:, 1200:, :]
 
-    audio_feature = audio_feature[:, 1200:, :]
     inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
+    out_tokens, out_positions = decoder(in_tokens, audio_feature)
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
     out_token_list = []
+    out_position_list = []
     for i in range(n_ctx_out):
         out_token_list.append(out_tokens[0, i])
+        out_position_list.append(out_positions[0, i])
     text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    print("PyTorch:", text, out_position_list)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
-    audio_feature = audio_feature[:, 10:, :]
-    inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
-    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[0, i])
-    text = tokenizer.decode(out_token_list)
-    print("PyTorch:", text)
+    #audio_feature = audio_feature[:, 10:, :]
+    #inference_start = time.time()
+    #out_tokens = decoder(in_tokens, audio_feature)
+    #print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+    #out_token_list = []
+    #for i in range(n_ctx_out):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    #print("PyTorch:", text)
 
 def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     isMultilingual = not name.endswith('en')
@@ -286,7 +290,7 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
     testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)

@@ -71,8 +71,8 @@ def model_export(model_name):
 if __name__ == '__main__':
     #model_export("tiny")
     #model_export("base")
-    model_export("small")
-    #model_export("medium")
+    #model_export("small")
+    model_export("medium")
     #model_export("tiny.en")
     #model_export("base.en")
     #model_export("small.en")

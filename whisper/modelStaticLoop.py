@@ -55,6 +55,8 @@ class WhisperSuppresion(nn.Module):
                 penultimate_token: Tensor #[n,1]   
                 ):
 
+        _, position = torch.topk(probs[:, self.TIMESTAMP_BEGIN:], k=1, dim=-1)
+
         if penultimate_token is None:
             probs += self.SUPPRESS_SYMBOLS__
             #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
@@ -73,7 +75,7 @@ class WhisperSuppresion(nn.Module):
             #token = torch.argmax(probs, dim=-1, keepdim=True)
             _, token = torch.topk(probs, k=1, dim=-1)
 
-        return token
+        return token, position
 
     def forward3(self, probs: Tensor, #[n,51865]
                 last_token: Tensor, #[n,1]
@@ -223,11 +225,12 @@ class GreedyDecoder(nn.Module):
         #[1,51865]
 
         #token = self.suppressor(probs, last_token, penultimate_token) #supression
-        token = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
+        #token = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
+        token, position = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
         #token = self.suppressor.forward3(probs, last_token, penultimate_token) #supression
 
         #x = torch.argmax(probs, dim=-1) #greedy
-        return token
+        return token, position
 
 class TextDecoder_StaticLoop(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool):
@@ -256,6 +259,7 @@ class TextDecoder_StaticLoop(nn.Module):
         xa = xa.float()
 
         out_token_list = []
+        out_position_list = []
 
         cross_k_list = []
         cross_v_list = []
@@ -307,8 +311,10 @@ class TextDecoder_StaticLoop(nn.Module):
             self_v_list.append(self_v_cache_updated)
             i += 1
         
-        token = self.greedyDecoder(x, lastToken, penultimateToken) #token=[1,1]
+        #token = self.greedyDecoder(x, lastToken, penultimateToken) #token=[1,1]
+        token, pos = self.greedyDecoder(x, lastToken, penultimateToken) #token=[1,1]
         out_token_list.append(token)
+        out_position_list.append(pos)
 
         penultimateToken = lastToken
         lastToken = token
@@ -341,12 +347,15 @@ class TextDecoder_StaticLoop(nn.Module):
                 self_v_list[i] = self_v_cache_updated #(1, n_ctx_cache + n_ctx, 512)
                 i += 1
 
-            token = self.greedyDecoder(x, lastToken, penultimateToken)
+            #token = self.greedyDecoder(x, lastToken, penultimateToken)
+            token, pos = self.greedyDecoder(x, lastToken, penultimateToken)
             out_token_list.append(token)
+            out_position_list.append(pos)
 
             penultimateToken = lastToken
             lastToken = token
             position = position + 1
 
         out_tokens = torch.cat(out_token_list, dim=-1)
-        return out_tokens
+        out_positions = torch.cat(out_position_list, dim=-1)
+        return out_tokens, out_positions
