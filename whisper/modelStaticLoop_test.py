@@ -7,7 +7,7 @@ import time
 import cv2
 
 from audio import load_audio, log_mel_spectrogram, SAMPLE_RATE
-from modelStaticLoop import TextDecoder_StaticLoop
+from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment
 from tokenizer import get_tokenizer
 
 def gen_audio_feature_zeros(model):
@@ -50,6 +50,34 @@ def gen_tokens(isMultilingual, tokenizer, n_ctx_in: int):
         in_tokens[:,n_ctx_in-3] = tokenizer.timestamp_begin + 1499
         in_tokens[:,n_ctx_in-4] = tokenizer.timestamp_begin + 1499
         in_tokens[:,0] = tokenizer.sot_prev
+    return in_tokens
+
+def gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in: int, words: str):
+    tokens_toAlign = tokenizer.encode(words)
+    
+    in_tokens = torch.ones((1, n_ctx_in), dtype=torch.int64)
+    if isMultilingual:
+        in_tokens[:,0] = tokenizer.sot
+        in_tokens[:,1] = 50259
+        in_tokens[:,2] = 50359
+        in_tokens[:,3] = tokenizer.timestamp_begin
+
+        for i in range(n_ctx_in - 4):
+            if len(tokens_toAlign) > i:
+                in_tokens[:,i + 4] = tokens_toAlign[i]
+            else:
+                in_tokens[:,i + 4] = tokenizer.eot
+
+    else:
+        in_tokens[:,0] = tokenizer.sot
+        in_tokens[:,1] = tokenizer.timestamp_begin
+
+        for i in range(n_ctx_in - 2):
+            if len(tokens_toAlign) > i:
+                in_tokens[:,i + 2] = tokens_toAlign[i]
+            else:
+                in_tokens[:,i + 2] = tokenizer.eot
+
     return in_tokens
 
 def testTorch_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
@@ -138,8 +166,8 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
     decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
 
     # warm up
-    for k in range(5):
-        out_tokens = decoder(in_tokens_zeros, audio_feature_zeros)
+    #for k in range(5):
+    #    out_tokens = decoder(in_tokens_zeros, audio_feature_zeros)
 
     inference_start = time.time()
     out_tokens = decoder(in_tokens, audio_feature)
@@ -151,6 +179,34 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
     text = tokenizer.decode(out_token_list)
 
     print("PyTorch:", text)
+
+def testTorch_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, n_ctx_out: int, makeOnnxAttentionPastPresent: bool):
+    isMultilingual = not name.endswith('en')
+    tokenizer = get_tokenizer(multilingual=isMultilingual)
+    audio_feature = gen_audio_feature(model).to(model.whisper.device)
+    audio_feature_zeros = gen_audio_feature_zeros(model)
+    in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+
+    in_tokens0 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.").to(model.whisper.device)
+    in_tokens1 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " and so my fellow Americans. Ask not what you want for free for you. Ask what you want to do for the community.").to(model.whisper.device)
+    in_tokens2 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " shloud I speak now? ah, and so my fellow Americans ask not what your country can do for you ask what you can do for your country").to(model.whisper.device)
+    in_tokens3 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " ah year oh my god ask not what your country can do for you ask what you can do for your country").to(model.whisper.device)
+    in_tokens = torch.cat([in_tokens0,in_tokens1,in_tokens2,in_tokens3], dim=0)
+
+    decoder = TextDecoder_ForcedAlignment(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
+
+    # warm up
+    #for k in range(3):
+    #    out_alignProbs = decoder(in_tokens_zeros, audio_feature_zeros)
+
+    inference_start = time.time()
+    out_alignProbs = decoder(in_tokens, audio_feature)
+    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+
+    for b in range(in_tokens.shape[0]):
+        for i in range(n_ctx_in - 1):
+            print(in_tokens[b, i + 1].detach().numpy().copy(), tokenizer.decode(in_tokens[b, i + 1]), out_alignProbs[b, i].detach().numpy().copy())
+        print("")
 
 def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     isMultilingual = not name.endswith('en')
@@ -221,8 +277,8 @@ if __name__ == '__main__':
     ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     ##print(result["text"])
 
-    model = load_model(model_name, device="cuda")
-    #model = load_model(model_name, device="cpu")
+    #model = load_model(model_name, device="cuda")
+    model = load_model(model_name, device="cpu")
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 1)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 2)
@@ -238,8 +294,8 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
-    testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
@@ -252,5 +308,8 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
-    testOnnx_AudioEncoder(model_name, model, 1500, 0)
-    testTorch_AudioEncoder(model_name, model, 1500, 0)
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    #testTorch_AudioEncoder(model_name, model, 1500, 0)
+
+    testTorch_TextDecoder_ForcedAlignment(model_name, model, 32, 32, False)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)

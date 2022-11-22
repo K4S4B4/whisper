@@ -151,7 +151,7 @@ class MultiHeadAttention(nn.Module):
         #return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
 
         x = (w @ v).permute(0, 2, 1, 3)
-        return torch.reshape(x, (1, x.shape[1], self.n_head * 64))
+        return torch.reshape(x, (*x.shape[:2], self.n_head * 64))
 
 
 class ResidualAttentionBlock(nn.Module):

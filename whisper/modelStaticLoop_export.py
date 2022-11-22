@@ -4,39 +4,51 @@ import onnx
 
 from modelStaticLoop import TextDecoder_StaticLoop
 
-def export_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool):
+def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool):
     isMultilingual = not name.endswith('en')
     decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
     device = model.whisper.device
     n_state = model.whisper.dims.n_text_state
     n_layer = model.whisper.dims.n_text_layer
 
-    token_list = []
-    for i in range(n_ctx_in):
-        token_list.append(torch.tensor(i, dtype=torch.int64).to(device))
-    dummy_tokens = torch.stack(token_list).unsqueeze(0)
-    #dummy_audioFeature = torch.randn((1, 1500, n_state), dtype=torch.float32).to(device)
-    #dummy_audioFeature = torch.randn((1, 1500, n_state), dtype=torch.float16).to(device)
-    if n_audioFeature >= 0:
-        dummy_audioFeature = torch.randn((1, n_audioFeature, n_state), dtype=torch.float16).to(device)
-    else:
-        dummy_audioFeature = torch.randn((1, 500, n_state), dtype=torch.float16).to(device)
-
-    inputs = ( dummy_tokens, dummy_audioFeature )
-    input_names = ['in_tokens', 'audio_feature']
-    output_names = ['out_tokens']
-
     file_base = "decoder_sl_a16_"
+    file_base += str(n_batch) + "_"
     file_base += str(n_ctx_in) + "_"
     file_base += str(n_ctx_out) + "_"
     file_base += str(n_audioFeature) + "_"
     file_base += name
     file_onnx = file_base + ".onnx"
-    #file_simp = file_base + "_smpl.onnx"
 
     dynamic_axes = dict()
+    if n_batch < 0:
+        dynamic_axes['in_tokens'] = {0: 'n_batch'}
+        dynamic_axes['audio_feature'] = {0: 'n_batch'}
+        n_batch = 1
+    if n_ctx_in < 0:
+        if 'in_tokens' in dynamic_axes.keys():
+            dynamic_axes['in_tokens'][1] = 'n_tokens_in'
+        else:
+            dynamic_axes['in_tokens'] = {1: 'n_tokens_in'}
+        n_ctx_in = 4
     if n_audioFeature < 0:
-        dynamic_axes['audio_feature'] = {1: 'n_audio_feature'}
+        if 'audio_feature' in dynamic_axes.keys():
+            dynamic_axes['audio_feature'][1] = 'n_audio_feature'
+        else:
+            dynamic_axes['audio_feature'] = {1: 'n_audio_feature'}
+        n_audioFeature = 1500
+
+    token_list = []
+    for i in range(n_ctx_in):
+        token_list.append(torch.tensor(i, dtype=torch.int64).to(device))
+    dummy_tokens = torch.stack(token_list).unsqueeze(0)
+    dummy_tokens = dummy_tokens.expand(n_batch, n_ctx_in)
+    dummy_audioFeature = torch.randn((1, n_audioFeature, n_state), dtype=torch.float16).to(device)
+
+    inputs = ( dummy_tokens, dummy_audioFeature )
+    input_names = ['in_tokens', 'audio_feature']
+    output_names = ['out_tokens']
+
+
 
     torch.onnx.export(decoder,
                     inputs,
@@ -48,10 +60,6 @@ def export_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, n_
                     output_names=output_names,
                     dynamic_axes=dynamic_axes
     )
-    #onnx_model = onnx.load(f'{file_onnx}')
-    #onnx_model_simp, check = simplify(onnx_model)
-    #onnx.save(onnx_model_simp, f'{file_simp}')
-
 
 def simplify_TextDecoder_StaticLoop(name, n_ctx_in: int, n_ctx_out: int):
     from onnxsim import simplify
@@ -87,10 +95,11 @@ def executeExport(model_name):
     # cacheReturnRule = 3 : return appended self cache for Onnx Attention node
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 8, True)
-    export_TextDecoder_StaticLoop(model_name, model, 16, 16, -1, True)
+    #export_TextDecoder_StaticLoop(model_name, model, 16, 16, -1, True)
     #export_TextDecoder_StaticLoop(model_name, model, 32, 32, True)
 
-    #export_TextDecoder_StaticLoop(model_name, model, 9, 3, -1, True)
+    #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
+    export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
@@ -110,9 +119,9 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #executeExport("tiny")
+    executeExport("tiny")
     #executeExport("base")
-    executeExport("small")
+    #executeExport("small")
     #executeExport("medium")
     #executeExport("tiny.en")
     #executeExport("base.en")

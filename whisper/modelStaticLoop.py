@@ -59,6 +59,7 @@ class WhisperSuppresion(nn.Module):
             probs += self.SUPPRESS_SYMBOLS__
             #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
             _, token = torch.topk(probs, k=1, dim=-1)
+            print(_, token )
 
         else:
             token_text_prob, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
@@ -72,6 +73,7 @@ class WhisperSuppresion(nn.Module):
             probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum >= token_text_prob)
             #token = torch.argmax(probs, dim=-1, keepdim=True)
             _, token = torch.topk(probs, k=1, dim=-1)
+            print(_, token )
 
         return token
 
@@ -350,3 +352,96 @@ class TextDecoder_StaticLoop(nn.Module):
 
         out_tokens = torch.cat(out_token_list, dim=-1)
         return out_tokens
+
+class TextDecoder_ForcedAlignment(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool):
+        super().__init__()
+        self.textDecoder = in_textDecoder
+        self.n_head = in_textDecoder.blocks[0].cross_attn.n_head
+        self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
+        #self.n_ctx_in = n_ctx_in
+        self.n_ctx_out = n_ctx_out
+        self.suppression = WhisperSuppresion(isMultilingual, next(in_textDecoder.parameters()).device)
+        self.makeOnnxAttentionPastPresent = makeOnnxAttentionPastPresent
+
+        self.blocks = []
+        for orginal_block in self.textDecoder.blocks:
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) 
+
+    def forward(self, tokens: Tensor, #[n, n_ctx_in]
+                xa: Tensor
+                ):
+        """
+        x : torch.LongTensor, shape = (batch_size, <= n_ctx)
+            the text tokens
+        xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
+            the encoded audio features to be attended on
+        """
+        xa = xa.float()
+
+        out_token_list = []
+
+        cross_k_list = []
+        cross_v_list = []
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                #cross_k_list.append(block.cross_attn.key(xa))
+                #cross_v_list.append(block.cross_attn.value(xa))
+                cross_k = block.cross_attn.key(xa)
+                cross_v = block.cross_attn.value(xa)
+                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
+                cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
+                cross_k_list.append(cross_k)
+                cross_v_list.append(cross_v)
+        #n_layer_cross_k = torch.stack(cross_k_list)
+        #n_layer_cross_v = torch.stack(cross_v_list)
+        n_layer_cross_k = cross_k_list
+        n_layer_cross_v = cross_v_list
+
+        penultimateToken = None
+        lastToken = tokens[:,-1]
+        ############ First itr
+
+        mask = self.textDecoder.mask[:tokens.shape[1], :tokens.shape[1]]
+        pos_emb_slice = self.textDecoder.positional_embedding[0:tokens.shape[1]] #diff!
+        x = self.textDecoder.token_embedding(tokens) + pos_emb_slice #same
+        x = x.to(xa.dtype) #same
+
+        # calc self attention while inputing and outputing kv_cache
+        i = 0
+        self_k_list = [] #[8,1,n_ctx_in,512]
+        self_v_list = []
+        for block in self.blocks:
+            x, self_k_cache_updated, self_v_cache_updated = block(x, 
+                                                                  self_k_cache = None, 
+                                                                  self_v_cache = None,
+                                                                  cross_k = n_layer_cross_k[i], 
+                                                                  cross_v = n_layer_cross_v[i], 
+                                                                  mask=mask) # diff!
+
+            if self.makeOnnxAttentionPastPresent: # ONNX Attention Node I/O = past/present
+                k_t = self_k_cache_updated.view(*self_k_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                v_t = self_v_cache_updated.view(*self_v_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+                self_kv_stack = torch.stack([k_t, v_t], dim=0)
+                k_t = self_kv_stack[0].permute(0, 2, 1, 3)
+                v_t = self_kv_stack[1].permute(0, 2, 1, 3)
+                self_k_cache_updated = torch.reshape(k_t, (*k_t.shape[:2], self.n_head * 64))
+                self_v_cache_updated = torch.reshape(v_t, (*v_t.shape[:2], self.n_head * 64))
+            self_k_list.append(self_k_cache_updated)
+            self_v_list.append(self_v_cache_updated)
+            i += 1
+        
+        ###########################################
+        # diff from here
+        ###########################################
+
+        x = self.textDecoder.ln(x) #same
+        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+        #[n, n_ctx_in, 51865]
+
+        probs = F.softmax(logits, dim=-1)
+        #[n, n_ctx_in, 51865]
+
+        forcedProbs = torch.gather(probs[:, 0:-1, :], 2, tokens[:, 1:].unsqueeze(-1))
+
+        return forcedProbs
