@@ -7,7 +7,7 @@ import time
 import cv2
 
 from audio import load_audio, log_mel_spectrogram, SAMPLE_RATE
-from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment
+from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment, TextDecoder_dynamicLoop
 from tokenizer import get_tokenizer
 
 def gen_audio_feature_zeros(model):
@@ -163,7 +163,7 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
     audio_feature_zeros = gen_audio_feature_zeros(model)
     in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
 
-    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
+    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent, 64)
 
     # warm up
     #for k in range(5):
@@ -176,6 +176,31 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
     out_token_list = []
     for i in range(n_ctx_out):
         out_token_list.append(out_tokens[0, i])
+    text = tokenizer.decode(out_token_list)
+
+    print("PyTorch:", text)
+
+def testTorch_TextDecoder_DynamicLoop(name, model, n_ctx_in: int, n_ctx_out: int):
+    isMultilingual = not name.endswith('en')
+    tokenizer = get_tokenizer(multilingual=isMultilingual)
+    audio_feature = gen_audio_feature(model).to(model.whisper.device)
+    in_tokens = gen_tokens(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+    audio_feature_zeros = gen_audio_feature_zeros(model)
+    in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+
+    decoder = TextDecoder_dynamicLoop(model.whisper.decoder, n_ctx_out, isMultilingual, model.whisper.dims.n_text_layer)
+
+    # warm up
+    for k in range(5):
+        out_tokens = decoder.run(in_tokens_zeros, audio_feature_zeros)
+
+    inference_start = time.time()
+    out_tokens = decoder.run(in_tokens, audio_feature)
+    print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
+
+    out_token_list = []
+    for i in range(n_ctx_out):
+        out_token_list.append(out_tokens[i, 0, 0])
     text = tokenizer.decode(out_token_list)
 
     print("PyTorch:", text)
@@ -196,8 +221,8 @@ def testTorch_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, n_ctx_out:
     decoder = TextDecoder_ForcedAlignment(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
 
     # warm up
-    #for k in range(3):
-    #    out_alignProbs = decoder(in_tokens_zeros, audio_feature_zeros)
+    for k in range(3):
+        out_alignProbs = decoder(in_tokens_zeros, audio_feature_zeros)
 
     inference_start = time.time()
     out_alignProbs = decoder(in_tokens, audio_feature)
@@ -205,10 +230,59 @@ def testTorch_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, n_ctx_out:
 
     for b in range(in_tokens.shape[0]):
         for i in range(n_ctx_in - 1):
-            print(in_tokens[b, i + 1].detach().numpy().copy(), tokenizer.decode(in_tokens[b, i + 1]), out_alignProbs[b, i].detach().numpy().copy())
+            print(in_tokens[b, i + 1].to('cpu').detach().numpy().copy(), tokenizer.decode(in_tokens[b, i + 1]), out_alignProbs[b, i].to('cpu').detach().numpy().copy())
         print("")
 
-def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
+def testOnnx_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, isDynamic: bool):
+    isMultilingual = not name.endswith('en')
+    tokenizer = get_tokenizer(multilingual=isMultilingual)
+    audio_feature = gen_audio_feature(model).to(model.whisper.device)
+    audio_feature_zeros = gen_audio_feature_zeros(model)
+    in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+
+    in_tokens0 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.").to(model.whisper.device)
+    in_tokens1 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " and so my fellow Americans. Ask not what you want for free for you. Ask what you want to do for the community.").to(model.whisper.device)
+    in_tokens2 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " shloud I speak now? ah, and so my fellow Americans ask not what your country can do for you ask what you can do for your country").to(model.whisper.device)
+    in_tokens3 = gen_tokens_toAlign(isMultilingual, tokenizer, n_ctx_in, " ah year oh my god ask not what your country can do for you ask what you can do for your country").to(model.whisper.device)
+    in_tokens = torch.cat([in_tokens0,in_tokens1,in_tokens2,in_tokens3], dim=0)
+
+    ###################################################################
+    sess_options = onnxruntime.SessionOptions()
+    providers = ['CUDAExecutionProvider']
+    
+    if isDynamic:
+        model_path = f'decoder_fa_a16_8_-1_0_1500_int32_{name}_opt_fp16.onnx'
+    else:
+        model_path = f'decoder_fa_a16_4_32_0_1500_int32_{name}_opt_fp16.onnx'
+
+    load_start = time.time()
+    session = onnxruntime.InferenceSession(model_path, sess_options, providers)
+    print("Load took:", time.time() - load_start, "s")
+
+    in_tokens_zeros_4 = torch.cat([in_tokens_zeros, in_tokens_zeros, in_tokens_zeros, in_tokens_zeros], dim=0)
+    # warm up
+    ort_inputs = {
+        'in_tokens':  in_tokens_zeros_4.to('cpu').detach().numpy().copy().astype(np.int32),
+        'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+    }
+    for k in range(3):
+        out_alignProbs = session.run(None, ort_inputs)[0]
+
+    ort_inputs = {
+        'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int32),
+        'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+    }
+    inference_start = time.time()
+    out_alignProbs = session.run(None, ort_inputs)[0]
+    print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
+    ###################################################################
+
+    for b in range(in_tokens.shape[0]):
+        for i in range(n_ctx_in - 1):
+            print(in_tokens[b, i + 1].to('cpu').detach().numpy().copy(), tokenizer.decode(in_tokens[b, i + 1]), out_alignProbs[b, i])
+        print("")
+
+def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, isDynamic: bool):
     isMultilingual = not name.endswith('en')
     tokenizer = get_tokenizer(multilingual=isMultilingual)
     audio_feature = gen_audio_feature(model)
@@ -221,11 +295,15 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     #providers = ['DmlExecutionProvider']
     providers = ['CUDAExecutionProvider']
     #providers = ['CPUExecutionProvider']
-    #sess_options.log_severity_level = 0
-    #sess_options.log_verbosity_level = 1
+    sess_options.log_severity_level = 0
+    sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
     
-    model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    if isDynamic:
+        model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+    else:
+        model_path = f'decoder_sl_a16_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl_opt16.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
@@ -236,17 +314,29 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int):
     print("Load took:", time.time() - load_start, "s")
 
     # warm up
-    ort_inputs = {
-        'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int64),
-        'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float32)
-    }
+    if isDynamic:
+        ort_inputs = {
+            'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int32),
+            'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
+    else:
+        ort_inputs = {
+            'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int64),
+            'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
     for k in range(5):
         out_tokens = session.run(None, ort_inputs)
 
-    ort_inputs = {
-        'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int64),
-        'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float32)
-    }
+    if isDynamic:
+        ort_inputs = {
+            'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int32),
+            'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
+    else:
+        ort_inputs = {
+            'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int64),
+            'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
     inference_start = time.time()
     out_tokens = session.run(None, ort_inputs)
     print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
@@ -277,8 +367,8 @@ if __name__ == '__main__':
     ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     ##print(result["text"])
 
-    #model = load_model(model_name, device="cuda")
-    model = load_model(model_name, device="cpu")
+    model = load_model(model_name, device="cuda")
+    #model = load_model(model_name, device="cpu")
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 1)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 2)
@@ -294,7 +384,12 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
@@ -311,5 +406,9 @@ if __name__ == '__main__':
     #testOnnx_AudioEncoder(model_name, model, 1500, 0)
     #testTorch_AudioEncoder(model_name, model, 1500, 0)
 
-    testTorch_TextDecoder_ForcedAlignment(model_name, model, 32, 32, False)
-    testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
+    #testOnnx_TextDecoder_ForcedAlignment(model_name, model, 32, True)
+    #testOnnx_TextDecoder_ForcedAlignment(model_name, model, 32, False)
+    #testTorch_TextDecoder_ForcedAlignment(model_name, model, 32, 32, False)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
+
+    testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 16)

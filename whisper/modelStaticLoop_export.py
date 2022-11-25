@@ -1,21 +1,34 @@
 import torch
+#import onnx
 
-import onnx
+from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment
 
-from modelStaticLoop import TextDecoder_StaticLoop
-
-def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool):
+def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool, ioInt: int):
     isMultilingual = not name.endswith('en')
-    decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
     device = model.whisper.device
     n_state = model.whisper.dims.n_text_state
     n_layer = model.whisper.dims.n_text_layer
+    if ioInt == 32:
+        intDtype = torch.int32
+    else:
+        intDtype = torch.int64
 
-    file_base = "decoder_sl_a16_"
+    if n_ctx_out == 0:
+        decoder = TextDecoder_ForcedAlignment(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent)
+        file_base = "decoder_fa_a16_"
+        output_names = ['out_probs']
+    else:
+        decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent, ioInt)
+        file_base = "decoder_sl_a16_"
+        output_names = ['out_tokens']
+
+    input_names = ['in_tokens', 'audio_feature']
+
     file_base += str(n_batch) + "_"
     file_base += str(n_ctx_in) + "_"
     file_base += str(n_ctx_out) + "_"
     file_base += str(n_audioFeature) + "_"
+    file_base += "int" + str(ioInt) + "_"
     file_base += name
     file_onnx = file_base + ".onnx"
 
@@ -39,16 +52,12 @@ def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ct
 
     token_list = []
     for i in range(n_ctx_in):
-        token_list.append(torch.tensor(i, dtype=torch.int64).to(device))
+        token_list.append(torch.tensor(i, dtype=intDtype).to(device))
     dummy_tokens = torch.stack(token_list).unsqueeze(0)
     dummy_tokens = dummy_tokens.expand(n_batch, n_ctx_in)
     dummy_audioFeature = torch.randn((1, n_audioFeature, n_state), dtype=torch.float16).to(device)
 
     inputs = ( dummy_tokens, dummy_audioFeature )
-    input_names = ['in_tokens', 'audio_feature']
-    output_names = ['out_tokens']
-
-
 
     torch.onnx.export(decoder,
                     inputs,
@@ -99,7 +108,9 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, 32, 32, True)
 
     #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
-    export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
+    #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
+    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
@@ -108,6 +119,10 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, 8, 32)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 64)
     #export_TextDecoder_StaticLoop(model_name, model, 32, 64)
+
+    ## forced alignment
+    #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 0, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 4, 32, 0, 1500, True, 32)
 
 if __name__ == '__main__':
     #model_name = "tiny"
@@ -119,9 +134,9 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    executeExport("tiny")
+    #executeExport("tiny")
     #executeExport("base")
-    #executeExport("small")
+    executeExport("small")
     #executeExport("medium")
     #executeExport("tiny.en")
     #executeExport("base.en")

@@ -1,0 +1,3 @@
+Load took: 91.03191828727722 s
+ONNX RT Inference took: 58.99977684020996 ms
+ONNX RT:  And so my fellow Americans, ask not what your country can do for you,

@@ -50,33 +50,6 @@ class WhisperSuppresion(nn.Module):
 
         return val
 
-    def forward2(self, probs: Tensor, #[n,51865]
-                last_token: Tensor, #[n,1]
-                penultimate_token: Tensor #[n,1]   
-                ):
-
-        if penultimate_token is None:
-            probs += self.SUPPRESS_SYMBOLS__
-            #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
-            _, token = torch.topk(probs, k=1, dim=-1)
-            print(_, token )
-
-        else:
-            token_text_prob, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
-            timeProbSum        = torch.sum(probs[:, self.TIMESTAMP_BEGIN:], dim=-1, keepdim=True) #[n,1]
-
-            is_last_timestamp = last_token >= self.TIMESTAMP_BEGIN
-            is_penultimate_timestamp = penultimate_token >= self.TIMESTAMP_BEGIN
-            probs += self.SUPPRESS_SYMBOLS__
-            probs += self.SUPPRESS_TIMESTAMP * (is_last_timestamp * is_penultimate_timestamp)
-            probs += self.SUPPRESS_ORDINARY_ * (is_last_timestamp * ~is_penultimate_timestamp)
-            probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum >= token_text_prob)
-            #token = torch.argmax(probs, dim=-1, keepdim=True)
-            _, token = torch.topk(probs, k=1, dim=-1)
-            print(_, token )
-
-        return token
-
     def forward3(self, probs: Tensor, #[n,51865]
                 last_token: Tensor, #[n,1]
                 penultimate_token: Tensor #[n,1]   
@@ -202,18 +175,44 @@ class WhisperSuppresion(nn.Module):
 
         return token
 
+class WhisperSuppresion_staticLoop(WhisperSuppresion):
+    def forward(self, probs: Tensor, #[n,51865]
+                last_token: Tensor, #[n,1]
+                penultimate_token: Tensor #[n,1]   
+                ):
+
+        if penultimate_token is None:
+            probs += self.SUPPRESS_SYMBOLS__
+            #token = torch.argmax(probs[:, :self.TIMESTAMP_BEGIN], dim=-1, keepdim=True)
+            _, token = torch.topk(probs, k=1, dim=-1)
+            print(_, token )
+
+        else:
+            textProbMax, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
+            timeProbSum    = torch.sum(probs[:, self.TIMESTAMP_BEGIN:], dim=-1, keepdim=True) #[n,1]
+
+            is_last_timestamp = last_token >= self.TIMESTAMP_BEGIN
+            is_penultimate_timestamp = penultimate_token >= self.TIMESTAMP_BEGIN
+            probs += self.SUPPRESS_SYMBOLS__
+            probs += self.SUPPRESS_TIMESTAMP * (is_last_timestamp * is_penultimate_timestamp)
+            probs += self.SUPPRESS_ORDINARY_ * (is_last_timestamp * ~is_penultimate_timestamp)
+            probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum >= textProbMax)
+            #token = torch.argmax(probs, dim=-1, keepdim=True)
+            _, token = torch.topk(probs, k=1, dim=-1)
+            print(_, token )
+
+        return token
 
 class GreedyDecoder(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, isMultilingual: bool):
         super().__init__()
         self.textDecoder = in_textDecoder
-        self.suppressor = WhisperSuppresion(isMultilingual, next(in_textDecoder.parameters()).device)
+        #self.suppressor = WhisperSuppresion(isMultilingual, next(in_textDecoder.parameters()).device)
+        self.suppressor = WhisperSuppresion_staticLoop(isMultilingual, next(in_textDecoder.parameters()).device)
 
-    def forward(self, x: Tensor, #[1,n_ctx_in,512]
-                last_token: Tensor, #[1,1]
-                penultimate_token: Tensor #[1,1]
-                ):
+    def getProbs(self, x: Tensor): 
 
+        #[1,n_ctx_in,512]
         x = x[:,-1,:] #greedy
         #[1,512]
 
@@ -224,15 +223,21 @@ class GreedyDecoder(nn.Module):
         probs = F.softmax(logits, dim=-1) #greedy
         #[1,51865]
 
-        #token = self.suppressor(probs, last_token, penultimate_token) #supression
-        token = self.suppressor.forward2(probs, last_token, penultimate_token) #supression
-        #token = self.suppressor.forward3(probs, last_token, penultimate_token) #supression
+        return probs
 
-        #x = torch.argmax(probs, dim=-1) #greedy
+    def forward(self, x: Tensor, #[1,n_ctx_in,512]
+                last_token: Tensor, #[1,1]
+                penultimate_token: Tensor #[1,1]
+                ):
+        #[1,n_ctx_in,512]
+        probs = self.getProbs(x)
+        #[1,51865]
+        token = self.suppressor(probs, last_token, penultimate_token) #supression
+        #[1,1]
         return token
 
 class TextDecoder_StaticLoop(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool):
+    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, makeOnnxAttentionPastPresent: bool, ioInt: int):
         super().__init__()
         self.textDecoder = in_textDecoder
         self.n_head = in_textDecoder.blocks[0].cross_attn.n_head
@@ -244,7 +249,9 @@ class TextDecoder_StaticLoop(nn.Module):
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) 
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0))
+
+        self.ioInt = ioInt
 
     def forward(self, tokens: Tensor, 
                 xa: Tensor
@@ -351,6 +358,10 @@ class TextDecoder_StaticLoop(nn.Module):
             position = position + 1
 
         out_tokens = torch.cat(out_token_list, dim=-1)
+
+        if self.ioInt == 32:
+            out_tokens.to(torch.int32)
+
         return out_tokens
 
 class TextDecoder_ForcedAlignment(nn.Module):
@@ -442,6 +453,201 @@ class TextDecoder_ForcedAlignment(nn.Module):
         probs = F.softmax(logits, dim=-1)
         #[n, n_ctx_in, 51865]
 
-        forcedProbs = torch.gather(probs[:, 0:-1, :], 2, tokens[:, 1:].unsqueeze(-1))
+        if tokens.dtype == torch.int32:
+            forcedProbs = torch.gather(probs[:, 0:-1, :], 2, tokens[:, 1:].unsqueeze(-1).to(torch.int64))
+        else:
+            forcedProbs = torch.gather(probs[:, 0:-1, :], 2, tokens[:, 1:].unsqueeze(-1))
 
         return forcedProbs
+
+class WhisperSuppresion_dynamicLoop(WhisperSuppresion):
+    def forward(self, 
+                probs: Tensor, #[n,51865]
+                ):
+
+        textProbMax, _ = torch.max(probs[:, :self.END_TRANSCRIPT ], dim=-1, keepdim=True) #[n,1]
+        timeProbSum    = torch.sum(probs[:, self.TIMESTAMP_BEGIN:], dim=-1, keepdim=True) #[n,1]
+
+        probs += self.SUPPRESS_SYMBOLS__
+        probs += self.EXTRACT_TIMESTAMP_ * (timeProbSum > textProbMax)
+        _, token = torch.topk(probs, k=1, dim=-1)
+
+        return token
+
+class GreedyDecoder_dynamicLoop(GreedyDecoder):
+    def __init__(self, in_textDecoder: TextDecoder, isMultilingual: bool):
+        super().__init__(in_textDecoder, isMultilingual)
+        self.suppressor = WhisperSuppresion_dynamicLoop(isMultilingual, next(in_textDecoder.parameters()).device)
+
+    def forward(self, x: Tensor, #[1,n_ctx_in,512]
+                ):
+        probs = self.getProbs(x)
+        token = self.suppressor(probs) #supression
+        return token
+
+class TextDecoder_dynamicLoop(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, n_layer: int):
+        super().__init__()
+        self.textDecoder = in_textDecoder
+        self.n_head = in_textDecoder.blocks[0].cross_attn.n_head
+        self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
+        #self.n_ctx_in = n_ctx_in
+        self.n_layer = n_layer
+        self.n_ctx_out = n_ctx_out
+        self.device = next(in_textDecoder.parameters()).device
+        self.greedyDecoder = GreedyDecoder_dynamicLoop(in_textDecoder, isMultilingual)
+        self.suppression = WhisperSuppresion_dynamicLoop(isMultilingual, self.device)
+
+        self.blocks = []
+        for orginal_block in self.textDecoder.blocks:
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) #self_kv_cache shape = (1, n_ctx_cache + n_ctx, 512)
+
+    def calcCrossKv(self, 
+                   xa: Tensor
+                   ):
+        xa = xa.float()
+        cross_k_list = []
+        cross_v_list = []
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                cross_k = block.cross_attn.key(xa)
+                cross_v = block.cross_attn.value(xa)
+                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
+                cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
+                cross_k_list.append(cross_k)
+                cross_v_list.append(cross_v)
+        return cross_k_list, cross_v_list
+
+    def loopBody(self, 
+                 trip_count: Tensor, #int64
+                 in_cond: Tensor, #bool
+                 in_tokens: Tensor, #int32[b,t]
+                 in_positions: Tensor, #int32[b,t]
+                 in_self_kv_list, #float16[2,b,n_head,n_ctx_total,64] list
+                 n_layer_cross_k, #float16[  b,n_head,64,1500]
+                 n_layer_cross_v, #float16[  b,n_head,64,1500]
+                 ):
+        in_tokens = in_tokens.to(torch.int64)
+        in_positions = in_positions.to(torch.int64)
+
+        #mask = self.textDecoder.mask[:in_tokens.shape[1], :in_tokens.shape[1]]
+        mask = None
+        pos_emb_slice = self.textDecoder.positional_embedding[in_positions] #diff!
+        x = self.textDecoder.token_embedding(in_tokens) + pos_emb_slice #same
+        #x = x.to(xa.dtype) #same
+
+        out_self_kv_list = []
+        i = 0
+        for block in self.blocks: 
+            if in_self_kv_list is None:
+                self_k = None
+                self_v = None
+            else:
+                self_k = in_self_kv_list[i][0] #float16[b,n_head,n_ctx_cache,64]
+                self_v = in_self_kv_list[i][1] #float16[b,n_head,n_ctx_cache,64]
+                self_k = self_k.permute(0, 2, 1, 3) #float16[b,n_ctx_cache,n_head,64]
+                self_v = self_v.permute(0, 2, 1, 3) #float16[b,n_ctx_cache,n_head,64]
+                self_k = torch.reshape(self_k, (*self_k.shape[:2], self.n_head * 64)) #float16[b,n_ctx_cache,512]
+                self_v = torch.reshape(self_v, (*self_v.shape[:2], self.n_head * 64)) #float16[b,n_ctx_cache,512]
+
+            x, self_k_cache_updated, self_v_cache_updated = block(x, 
+                                                                  self_k_cache = self_k, 
+                                                                  self_v_cache = self_v,
+                                                                  cross_k = n_layer_cross_k[i], 
+                                                                  cross_v = n_layer_cross_v[i], 
+                                                                  mask=mask) # diff!
+
+            k_t = self_k_cache_updated.view(*self_k_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+            v_t = self_v_cache_updated.view(*self_v_cache_updated.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)#(1, 8, n_ctx_cache + n_ctx, 64)
+            self_kv_stack = torch.stack([k_t, v_t], dim=0) #[2,b,n_head,n_ctx_total,64]
+            out_self_kv_list.append(self_kv_stack)         #[2,b,n_head,n_ctx_total,64] list
+            i += 1
+
+        out_token = self.greedyDecoder(x)
+        out_token_scan = out_token
+        out_cond = out_token < self.suppression.END_TRANSCRIPT
+        out_positions = in_positions[:,-1] + torch.ones([1,1], dtype=torch.int32).to(self.device)
+
+        #TODO impl repeat termination condition
+
+        return (
+            out_cond, 
+            out_token,
+            out_positions,
+            out_self_kv_list,
+            out_token_scan
+            )
+
+    def preprocess(self, 
+            #in_tokens: Tensor, #[n, n_ctx_in]
+            #in_positions: Tensor, #[n, n_ctx_in]
+            xa: Tensor
+            ):
+
+        out_token_scan =  torch.ones([5,1,1], dtype=torch.int32).to(self.device)
+
+        trip_count = torch.tensor(self.n_ctx_out, dtype=torch.int64).to(self.device) #max 128 loop
+        in_cond = torch.tensor(True, dtype=torch.bool).to(self.device)
+        #in_positions = torch.arange(0, in_tokens.shape[1]).unsqueeze(0).to(self.device)
+
+        self_kv_list = []
+        for i in range(self.n_layer):
+            self_kv_list.append(torch.zeros([2, 1, self.n_head, 0, 64], dtype=torch.float16).to(self.device))
+        n_layer_cross_k, n_layer_cross_v = self.calcCrossKv(xa)
+
+        return (out_token_scan,
+                trip_count, in_cond, #in_tokens, in_positions, 
+                self_kv_list,
+                n_layer_cross_k,
+                n_layer_cross_v,
+        )
+
+    def run(self, 
+            in_tokens: Tensor, #[n, n_ctx_in]
+            in_positions: Tensor, #[n, n_ctx_in]
+            xa: Tensor
+            ):
+
+        #trip_count = torch.tensor(128, dtype=torch.int64) #max 128 loop
+        #in_cond = torch.tensor(True, dtype=torch.bool)
+        #in_positions = torch.arange(0, in_tokens.shape[1]).unsqueeze(0)
+        #in_self_kv_list = None
+        #n_layer_cross_k, n_layer_cross_v = self.calcCrossKv(xa)
+
+        (
+            out_token_scan,
+            trip_count, in_cond, 
+            in_self_kv_list,
+            n_layer_cross_k,
+            n_layer_cross_v,
+        ) = self.preprocess(xa)
+
+        out_token_scan_list = []
+        for k in range(self.n_ctx_out):
+            (
+            out_cond, 
+            out_token,
+            out_positions,
+            out_self_kv_list,
+            out_token_scan
+            ) = self.loopBody(
+            trip_count, 
+            in_cond, 
+            in_tokens, 
+            in_positions, 
+            in_self_kv_list,
+            n_layer_cross_k, 
+            n_layer_cross_v 
+            )
+
+            out_token_scan_list.append(out_token) #[1,1] list
+            if not out_cond:
+                break
+            
+            in_tokens = out_token
+            in_positions = out_positions
+            in_self_kv_list = out_self_kv_list
+
+        out_token_scan = torch.stack(out_token_scan_list) #[n,1,1]
+        return out_token_scan
+
