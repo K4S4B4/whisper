@@ -605,9 +605,9 @@ class TextDecoder_dynamicLoop(nn.Module):
         else:
             out_cond = torch.any(out_cond)
 
-        #debug
-        if out_cond == False:
-            out_cond = False
+        ##debug
+        #if out_cond == False:
+        #    out_cond = False
 
         return (
             out_cond, 

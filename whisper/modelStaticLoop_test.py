@@ -220,11 +220,11 @@ def testOnnx_TextDecoder_DynamicLoop(name, model, n_ctx_in: int):
     sess_options = onnxruntime.SessionOptions()
     providers = ['CUDAExecutionProvider']
     #providers = ['CPUExecutionProvider']
-    sess_options.log_severity_level = 0
-    sess_options.log_verbosity_level = 1
+    #sess_options.log_severity_level = 0
+    #sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
     
-    model_path = f'dummyLoopIntegrated.onnx'
+    model_path = f'decoder_dl_a16_-1_128_1500_{name}_opt_fp16.onnx'
 
     load_start = time.time()
     session = onnxruntime.InferenceSession(model_path, sess_options, providers)
@@ -246,7 +246,9 @@ def testOnnx_TextDecoder_DynamicLoop(name, model, n_ctx_in: int):
     }
     inference_start = time.time()
     ort_outputs = session.run(None, ort_inputs)
-    print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
+    duration = time.time() - inference_start
+    print("ONNX RT Inference took:", duration * 1000, "ms")
+    print("average one inference: ", duration * 1000 / (len(ort_outputs[0][0]) - 1), "ms")
     ###################################################################
     text = tokenizer.decode(ort_outputs[0][0])
 
@@ -396,9 +398,9 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    model_name = "tiny"
+    #model_name = "tiny"
     #model_name = "base"
-    #model_name = "small"
+    model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"

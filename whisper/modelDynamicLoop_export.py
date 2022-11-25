@@ -103,6 +103,49 @@ class TextDecoder_dynamicLoop_base_driver(TextDecoder_dynamicLoop):
                 in_cross_v0, in_cross_v1, in_cross_v2, in_cross_v3, in_cross_v4, in_cross_v5,
         )
 
+class TextDecoder_dynamicLoop_small_body(TextDecoder_dynamicLoop):
+    def forward(self, trip_count, in_cond, in_tokens, in_positions, in_token_history, in_repeat_count,
+                in_self_kv0, in_self_kv1, in_self_kv2, in_self_kv3, in_self_kv4, in_self_kv5, in_self_kv6, in_self_kv7, in_self_kv8, in_self_kv9, in_self_kv10, in_self_kv11,
+                in_cross_k0, in_cross_k1, in_cross_k2, in_cross_k3, in_cross_k4, in_cross_k5, in_cross_k6, in_cross_k7, in_cross_k8, in_cross_k9, in_cross_k10, in_cross_k11,
+                in_cross_v0, in_cross_v1, in_cross_v2, in_cross_v3, in_cross_v4, in_cross_v5, in_cross_v6, in_cross_v7, in_cross_v8, in_cross_v9, in_cross_v10, in_cross_v11,
+    ):
+        self_kv_list =    [in_self_kv0, in_self_kv1, in_self_kv2, in_self_kv3, in_self_kv4, in_self_kv5, in_self_kv6, in_self_kv7, in_self_kv8, in_self_kv9, in_self_kv10, in_self_kv11,]
+        n_layer_cross_k = [in_cross_k0, in_cross_k1, in_cross_k2, in_cross_k3, in_cross_k4, in_cross_k5, in_cross_k6, in_cross_k7, in_cross_k8, in_cross_k9, in_cross_k10, in_cross_k11,]
+        n_layer_cross_v = [in_cross_v0, in_cross_v1, in_cross_v2, in_cross_v3, in_cross_v4, in_cross_v5, in_cross_v6, in_cross_v7, in_cross_v8, in_cross_v9, in_cross_v10, in_cross_v11,]
+
+        out_cond, out_token, out_positions, out_token_history, out_repeat_count, out_self_kv_list = self.loopBody(trip_count, in_cond, in_tokens, in_positions, in_token_history, in_repeat_count, self_kv_list, n_layer_cross_k, n_layer_cross_v)
+
+        outputList = [out_cond, out_token, out_positions, out_token_history, out_repeat_count]
+        outputList += out_self_kv_list
+        outputList += n_layer_cross_k
+        outputList += n_layer_cross_v
+
+        return tuple(outputList)
+
+class TextDecoder_dynamicLoop_small_driver(TextDecoder_dynamicLoop):
+    def forward(self, 
+                in_tokens, #[n, n_ctx_in]
+                in_positions, #[n, n_ctx_in]
+                xa
+                ):
+
+        out_token_history = torch.zeros([1,1], dtype=torch.int64).to(self.device)
+
+        (
+            trip_count, in_cond, #in_tokens, in_positions, 
+            in_token_history, in_repeat_count,
+            in_self_kv_list,
+            n_layer_cross_k,
+            n_layer_cross_v,
+        ) = self.preprocess(in_tokens, xa)
+
+        outputList = [out_token_history, trip_count, in_cond, in_tokens, in_positions, in_token_history, in_repeat_count]
+        outputList += in_self_kv_list
+        outputList += n_layer_cross_k
+        outputList += n_layer_cross_v
+
+        return tuple(outputList)
+    
 def export_TextDecoder_dynamicLoop_driver(name, model, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int):
     isMultilingual = not name.endswith('en')
     device = model.whisper.device
@@ -114,6 +157,8 @@ def export_TextDecoder_dynamicLoop_driver(name, model, n_ctx_in: int, n_ctx_out:
         decoder = TextDecoder_dynamicLoop_tiny_driver(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
     if name.startswith('base'):
         decoder = TextDecoder_dynamicLoop_base_driver(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
+    if name.startswith('small'):
+        decoder = TextDecoder_dynamicLoop_small_driver(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
 
     input_names = ['in_tokens', 'in_positions', 'audio_feature']
     output_names = ['out_token_history', 'trip_count', 'in_cond', 'in_tokens_dum', 'in_positions_dum', 'in_token_history', 'in_repeat_count']
@@ -124,11 +169,12 @@ def export_TextDecoder_dynamicLoop_driver(name, model, n_ctx_in: int, n_ctx_out:
     for i in range(n_layer):
         output_names.append('in_cross_v' + str(i))
 
-    file_base = "decoderDr_dl_a16_"
+    file_base = "decoder_dl_a16_"
     file_base += str(n_ctx_in) + "_"
     file_base += str(n_ctx_out) + "_"
     file_base += str(n_audioFeature) + "_"
-    file_base += name
+    file_base += name + "_"
+    file_base += "driver"
     file_onnx = file_base + ".onnx"
 
     dynamic_axes = dict()
@@ -175,12 +221,11 @@ def export_TextDecoder_dynamicLoop_body(name, model, n_ctx_in: int, n_ctx_out: i
     n_batch = 1
 
     if name.startswith('tiny'):
-        driver = TextDecoder_dynamicLoop_tiny_driver(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
         decoder = TextDecoder_dynamicLoop_tiny_body(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
     if name.startswith('base'):
-        driver = TextDecoder_dynamicLoop_base_driver(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
         decoder = TextDecoder_dynamicLoop_base_body(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
-
+    if name.startswith('small'):
+        decoder = TextDecoder_dynamicLoop_small_body(model.whisper.decoder, n_ctx_out, isMultilingual, n_layer)
 
     input_names = ['trip_count', 'in_cond', 'in_tokens', 'in_positions', 'in_token_history', 'in_repeat_count']
     for i in range(n_layer):
@@ -198,11 +243,12 @@ def export_TextDecoder_dynamicLoop_body(name, model, n_ctx_in: int, n_ctx_out: i
         output_names.append('out_cross_v' + str(i))
     #output_names.append('out_token_scan')
 
-    file_base = "decoderBd_dl_a16_"
+    file_base = "decoder_dl_a16_"
     file_base += str(n_ctx_in) + "_"
     file_base += str(n_ctx_out) + "_"
     file_base += str(n_audioFeature) + "_"
-    file_base += name
+    file_base += name + "_"
+    file_base += "body"
     file_onnx = file_base + ".onnx"
 
     dynamic_axes = dict()
@@ -267,8 +313,8 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
     #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
-    export_TextDecoder_dynamicLoop_driver(model_name, model, -1, 128, 1500)
-    #export_TextDecoder_dynamicLoop_body(model_name, model, 3, 128, 1500)
+    #export_TextDecoder_dynamicLoop_driver(model_name, model, -1, 128, 1500)
+    export_TextDecoder_dynamicLoop_body(model_name, model, -1, 128, 1500)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
@@ -292,9 +338,9 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    executeExport("tiny")
+    #executeExport("tiny")
     #executeExport("base")
-    #executeExport("small")
+    executeExport("small")
     #executeExport("medium")
     #executeExport("tiny.en")
     #executeExport("base.en")
