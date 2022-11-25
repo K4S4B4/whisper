@@ -248,7 +248,7 @@ def testOnnx_TextDecoder_DynamicLoop(name, model, n_ctx_in: int):
     ort_outputs = session.run(None, ort_inputs)
     duration = time.time() - inference_start
     print("ONNX RT Inference took:", duration * 1000, "ms")
-    print("average one inference: ", duration * 1000 / (len(ort_outputs[0][0]) - 1), "ms")
+    print("ave one inferc Dynamic:", duration * 1000 / (len(ort_outputs[0][0]) - 1), "ms")
     ###################################################################
     text = tokenizer.decode(ort_outputs[0][0])
 
@@ -344,8 +344,8 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     #providers = ['DmlExecutionProvider']
     providers = ['CUDAExecutionProvider']
     #providers = ['CPUExecutionProvider']
-    sess_options.log_severity_level = 0
-    sess_options.log_verbosity_level = 1
+    #sess_options.log_severity_level = 0
+    #sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
     
     if isDynamic:
@@ -373,7 +373,7 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
             'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int64),
             'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
         }
-    for k in range(5):
+    for k in range(3):
         out_tokens = session.run(None, ort_inputs)
 
     if isDynamic:
@@ -388,7 +388,9 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
         }
     inference_start = time.time()
     out_tokens = session.run(None, ort_inputs)
-    print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
+    duration = time.time() - inference_start
+    print("ONNX RT Inference took:", duration * 1000, "ms")
+    print("ave one inferec Static:", duration * 1000 / (len(out_tokens[0][0]) - 1), "ms")
     ###################################################################
 
     text = tokenizer.decode(out_tokens[0][0])
@@ -416,8 +418,8 @@ if __name__ == '__main__':
     ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     ##print(result["text"])
 
-    #model = load_model(model_name, device="cuda")
-    model = load_model(model_name, device="cpu")
+    model = load_model(model_name, device="cuda")
+    #model = load_model(model_name, device="cpu")
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 1)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 2)
@@ -438,7 +440,7 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
