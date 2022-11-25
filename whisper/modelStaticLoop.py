@@ -217,7 +217,8 @@ class GreedyDecoder(nn.Module):
         #[1,512]
 
         x = self.textDecoder.ln(x) #same
-        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+        #logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)).float() #same
+        logits = (x @ torch.transpose(self.textDecoder.token_embedding.weight.to(x.dtype), 0, 1)) #same
         #[1,51865]
 
         probs = F.softmax(logits, dim=-1) #greedy
@@ -485,6 +486,25 @@ class GreedyDecoder_dynamicLoop(GreedyDecoder):
         token = self.suppressor(probs) #supression
         return token
 
+class CrossKvCalculator(nn.Module):
+    def __init__(self, in_textDecoder: TextDecoder):
+        super().__init__()
+        self.textDecoder = in_textDecoder
+        self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
+
+    def forward(self, xa: Tensor):
+        cross_k_list = []
+        cross_v_list = []
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                cross_k = block.cross_attn.key(xa)
+                cross_v = block.cross_attn.value(xa)
+                cross_k = cross_k.view(*cross_k.shape[:2], block.cross_attn.n_head, 64).permute(0, 2, 3, 1) * self.scale2
+                cross_v = cross_v.view(*cross_v.shape[:2], block.cross_attn.n_head, 64).permute(0, 2, 1, 3)
+                cross_k_list.append(cross_k)
+                cross_v_list.append(cross_v)
+        return cross_k_list, cross_v_list
+
 class TextDecoder_dynamicLoop(nn.Module):
     def __init__(self, in_textDecoder: TextDecoder, n_ctx_out: int, isMultilingual: bool, n_layer: int):
         super().__init__()
@@ -497,42 +517,50 @@ class TextDecoder_dynamicLoop(nn.Module):
         self.device = next(in_textDecoder.parameters()).device
         self.greedyDecoder = GreedyDecoder_dynamicLoop(in_textDecoder, isMultilingual)
         self.suppression = WhisperSuppresion_dynamicLoop(isMultilingual, self.device)
+        self.crossKvCalculator = CrossKvCalculator(in_textDecoder)
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
             self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0)) #self_kv_cache shape = (1, n_ctx_cache + n_ctx, 512)
 
-    def calcCrossKv(self, 
-                   xa: Tensor
-                   ):
-        xa = xa.float()
-        cross_k_list = []
-        cross_v_list = []
-        for block in self.textDecoder.blocks:
-            if block.cross_attn:
-                cross_k = block.cross_attn.key(xa)
-                cross_v = block.cross_attn.value(xa)
-                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
-                cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
-                cross_k_list.append(cross_k)
-                cross_v_list.append(cross_v)
-        return cross_k_list, cross_v_list
+        self.REPEAT_MAX = 8
+
+    #def calcCrossKv(self, 
+    #               xa: Tensor
+    #               ):
+    #    #xa = xa.float()
+    #    cross_k_list = []
+    #    cross_v_list = []
+    #    for block in self.textDecoder.blocks:
+    #        if block.cross_attn:
+    #            cross_k = block.cross_attn.key(xa)
+    #            cross_v = block.cross_attn.value(xa)
+    #            cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
+    #            cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
+    #            cross_k_list.append(cross_k)
+    #            cross_v_list.append(cross_v)
+    #    return cross_k_list, cross_v_list
 
     def loopBody(self, 
                  trip_count: Tensor, #int64
                  in_cond: Tensor, #bool
                  in_tokens: Tensor, #int32[b,t]
                  in_positions: Tensor, #int32[b,t]
+                 in_token_history: Tensor, #int64[b,h]
+                 in_repeat_count: Tensor, #int64
                  in_self_kv_list, #float16[2,b,n_head,n_ctx_total,64] list
                  n_layer_cross_k, #float16[  b,n_head,64,1500]
                  n_layer_cross_v, #float16[  b,n_head,64,1500]
                  ):
-        in_tokens = in_tokens.to(torch.int64)
-        in_positions = in_positions.to(torch.int64)
+        #in_tokens = in_tokens.to(torch.int64)
+        #in_positions = in_positions.to(torch.int64)
 
         #mask = self.textDecoder.mask[:in_tokens.shape[1], :in_tokens.shape[1]]
         mask = None
-        pos_emb_slice = self.textDecoder.positional_embedding[in_positions] #diff!
+        if in_positions.dtype == torch.int64:
+            pos_emb_slice = self.textDecoder.positional_embedding[in_positions] #diff!
+        else:
+            pos_emb_slice = self.textDecoder.positional_embedding[in_positions.to(torch.int64)] #diff!
         x = self.textDecoder.token_embedding(in_tokens) + pos_emb_slice #same
         #x = x.to(xa.dtype) #same
 
@@ -564,39 +592,53 @@ class TextDecoder_dynamicLoop(nn.Module):
             i += 1
 
         out_token = self.greedyDecoder(x)
-        out_token_scan = out_token
-        out_cond = out_token < self.suppression.END_TRANSCRIPT
+        out_token_history = torch.cat([in_token_history, out_token], dim=-1)
         out_positions = in_positions[:,-1] + torch.ones([1,1], dtype=torch.int32).to(self.device)
 
-        #TODO impl repeat termination condition
+        #impl repeat termination condition
+        hasToken = (in_token_history == out_token)
+        #out_repeat_count = in_repeat_count + torch.sum(hasToken, dim=-1, keepdim=True)
+        out_repeat_count = in_repeat_count + torch.any(hasToken, dim=-1, keepdim=True)
+        out_cond = (out_token < self.suppression.END_TRANSCRIPT) * (out_repeat_count < self.REPEAT_MAX)
+        if out_cond.shape[0] == 1 and out_cond.shape[1] == 1:
+            out_cond = out_cond.squeeze()
+        else:
+            out_cond = torch.any(out_cond)
+
+        #debug
+        if out_cond == False:
+            out_cond = False
 
         return (
             out_cond, 
             out_token,
             out_positions,
+            out_token_history, #int64[b,h+1]
+            out_repeat_count,  #int64[b,1]
             out_self_kv_list,
-            out_token_scan
             )
 
     def preprocess(self, 
-            #in_tokens: Tensor, #[n, n_ctx_in]
+            in_tokens: Tensor, #[n, n_ctx_in]
             #in_positions: Tensor, #[n, n_ctx_in]
             xa: Tensor
             ):
 
-        out_token_scan =  torch.ones([5,1,1], dtype=torch.int32).to(self.device)
-
         trip_count = torch.tensor(self.n_ctx_out, dtype=torch.int64).to(self.device) #max 128 loop
         in_cond = torch.tensor(True, dtype=torch.bool).to(self.device)
         #in_positions = torch.arange(0, in_tokens.shape[1]).unsqueeze(0).to(self.device)
+        in_token_history = in_tokens[:,0:1]
+        in_repeat_count = torch.zeros([1,1], dtype=torch.int64).to(self.device)
 
         self_kv_list = []
         for i in range(self.n_layer):
-            self_kv_list.append(torch.zeros([2, 1, self.n_head, 0, 64], dtype=torch.float16).to(self.device))
-        n_layer_cross_k, n_layer_cross_v = self.calcCrossKv(xa)
+            self_kv_list.append(torch.zeros([2, 1, self.n_head, 0, 64], dtype=torch.float32).to(self.device))
+        #n_layer_cross_k, n_layer_cross_v = self.calcCrossKv(xa)
+        n_layer_cross_k, n_layer_cross_v = self.crossKvCalculator(xa)
 
-        return (out_token_scan,
+        return (
                 trip_count, in_cond, #in_tokens, in_positions, 
+                in_token_history, in_repeat_count,
                 self_kv_list,
                 n_layer_cross_k,
                 n_layer_cross_v,
@@ -615,39 +657,46 @@ class TextDecoder_dynamicLoop(nn.Module):
         #n_layer_cross_k, n_layer_cross_v = self.calcCrossKv(xa)
 
         (
-            out_token_scan,
+            #out_token_scan,
             trip_count, in_cond, 
+            in_token_history, in_repeat_count,
             in_self_kv_list,
             n_layer_cross_k,
             n_layer_cross_v,
-        ) = self.preprocess(xa)
+        ) = self.preprocess(in_tokens, xa)
 
-        out_token_scan_list = []
+        #out_token_scan_list = []
         for k in range(self.n_ctx_out):
             (
             out_cond, 
             out_token,
             out_positions,
+            out_token_history, 
+            out_repeat_count, 
             out_self_kv_list,
-            out_token_scan
             ) = self.loopBody(
             trip_count, 
             in_cond, 
             in_tokens, 
             in_positions, 
+            in_token_history, 
+            in_repeat_count,
             in_self_kv_list,
             n_layer_cross_k, 
             n_layer_cross_v 
             )
 
-            out_token_scan_list.append(out_token) #[1,1] list
+            #out_token_scan_list.append(out_token) #[1,1] list
             if not out_cond:
                 break
             
             in_tokens = out_token
             in_positions = out_positions
+            in_token_history = out_token_history
+            in_repeat_count  = out_repeat_count
             in_self_kv_list = out_self_kv_list
 
-        out_token_scan = torch.stack(out_token_scan_list) #[n,1,1]
-        return out_token_scan
+        #out_token_scan = torch.stack(out_token_scan_list) #[n,1,1]
+        #return out_token_scan
+        return out_token_history
 

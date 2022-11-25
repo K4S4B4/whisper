@@ -187,21 +187,68 @@ def testTorch_TextDecoder_DynamicLoop(name, model, n_ctx_in: int, n_ctx_out: int
     in_tokens = gen_tokens(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
     audio_feature_zeros = gen_audio_feature_zeros(model)
     in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+    in_positioins = torch.arange(0, in_tokens.shape[1]).unsqueeze(0).to(model.whisper.device)
 
     decoder = TextDecoder_dynamicLoop(model.whisper.decoder, n_ctx_out, isMultilingual, model.whisper.dims.n_text_layer)
 
     # warm up
-    for k in range(5):
-        out_tokens = decoder.run(in_tokens_zeros, audio_feature_zeros)
+    for k in range(3):
+        out_tokens = decoder.run(in_tokens_zeros, in_positioins, audio_feature_zeros)
 
     inference_start = time.time()
-    out_tokens = decoder.run(in_tokens, audio_feature)
+    out_tokens = decoder.run(in_tokens, in_positioins, audio_feature)
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
-    out_token_list = []
-    for i in range(n_ctx_out):
-        out_token_list.append(out_tokens[i, 0, 0])
-    text = tokenizer.decode(out_token_list)
+    #out_token_list = []
+    #for i in range(out_tokens.shape[1]):
+    #    out_token_list.append(out_tokens[0, i])
+    #text = tokenizer.decode(out_token_list)
+    text = tokenizer.decode(out_tokens[0])
+
+    print("PyTorch:", text)
+
+def testOnnx_TextDecoder_DynamicLoop(name, model, n_ctx_in: int):
+    isMultilingual = not name.endswith('en')
+    tokenizer = get_tokenizer(multilingual=isMultilingual)
+    audio_feature = gen_audio_feature(model).to(model.whisper.device)
+    in_tokens = gen_tokens(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+    audio_feature_zeros = gen_audio_feature_zeros(model)
+    in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in).to(model.whisper.device)
+    in_positioins = torch.arange(0, in_tokens.shape[1]).unsqueeze(0).to(model.whisper.device)
+
+    ###################################################################
+    sess_options = onnxruntime.SessionOptions()
+    providers = ['CUDAExecutionProvider']
+    #providers = ['CPUExecutionProvider']
+    sess_options.log_severity_level = 0
+    sess_options.log_verbosity_level = 1
+    #sess_options.enable_profiling = True
+    
+    model_path = f'dummyLoopIntegrated.onnx'
+
+    load_start = time.time()
+    session = onnxruntime.InferenceSession(model_path, sess_options, providers)
+    print("Load took:", time.time() - load_start, "s")
+
+    # warm up
+    ort_inputs = {
+        'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int64),
+        'in_positions':  in_positioins.to('cpu').detach().numpy().copy().astype(np.int32),
+        'audio_feature':  audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+    }
+    for k in range(3):
+        ort_outputs = session.run(None, ort_inputs)
+
+    ort_inputs = {
+        'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int64),
+        'in_positions':  in_positioins.to('cpu').detach().numpy().copy().astype(np.int32),
+        'audio_feature':  audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+    }
+    inference_start = time.time()
+    ort_outputs = session.run(None, ort_inputs)
+    print("ONNX RT Inference took:", (time.time() - inference_start) * 1000, "ms")
+    ###################################################################
+    text = tokenizer.decode(ort_outputs[0][0])
 
     print("PyTorch:", text)
 
@@ -349,9 +396,9 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    #model_name = "tiny"
+    model_name = "tiny"
     #model_name = "base"
-    model_name = "small"
+    #model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"
@@ -367,8 +414,8 @@ if __name__ == '__main__':
     ##result = model.transcribe("tests/MartinLutherKingTrim.wav", **args)
     ##print(result["text"])
 
-    model = load_model(model_name, device="cuda")
-    #model = load_model(model_name, device="cpu")
+    #model = load_model(model_name, device="cuda")
+    model = load_model(model_name, device="cpu")
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 1)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 2)
@@ -411,4 +458,5 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_ForcedAlignment(model_name, model, 32, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
 
-    testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 16)
+    #testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 128)
+    testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)
