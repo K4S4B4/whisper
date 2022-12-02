@@ -340,9 +340,10 @@ class Whisper(nn.Module):
     decode = decode_function
 
 class MultiHeadAttention_CrossKvCache(nn.Module):
-    def __init__(self, in_multiHeadAttention: MultiHeadAttention):
+    def __init__(self, in_multiHeadAttention: MultiHeadAttention, doScale: Optional[bool] = False):
         super().__init__()
         self.multiHeadAttention = in_multiHeadAttention
+        self.doScale = doScale
 
     def qkv_attention_cross(self, q: Tensor, k_t: Tensor, v_t: Tensor, mask: Optional[Tensor] = None):
         # this gives the same result. Note that values are selected so that (n_state / n_head) = 64
@@ -350,7 +351,10 @@ class MultiHeadAttention_CrossKvCache(nn.Module):
         k = k_t
         v = v_t
 
-        qk = q @ k #* self.multiHeadAttention.scale2
+        qk = q @ k
+
+        if self.doScale:
+            qk *= self.multiHeadAttention.scale2
 
         #global FOR_ONNX_EXPORT
         if FOR_ONNX_EXPORT:
@@ -462,11 +466,11 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
             return self.multiHeadAttention.out(wv), self_k_cache, self_v_cache
 
 class ResidualAttentionBlock_KvCache(nn.Module):
-    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock, cacheReturnRule: int):
+    def __init__(self, in_residualAttentionBlock: ResidualAttentionBlock, cacheReturnRule: int, doScaleCross: Optional[bool] = False):
         super().__init__()
         self.originalBlock = in_residualAttentionBlock
         self.attn = MultiHeadAttention_SelfKvCache(in_residualAttentionBlock.attn, cacheReturnRule)
-        self.cross_attn = MultiHeadAttention_CrossKvCache(in_residualAttentionBlock.cross_attn) if in_residualAttentionBlock.cross_attn else None
+        self.cross_attn = MultiHeadAttention_CrossKvCache(in_residualAttentionBlock.cross_attn, doScaleCross) if in_residualAttentionBlock.cross_attn else None
 
     def forward(
         self,

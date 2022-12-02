@@ -313,8 +313,8 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
     #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
-    #export_TextDecoder_dynamicLoop_driver(model_name, model, -1, 128, 1500)
-    export_TextDecoder_dynamicLoop_body(model_name, model, -1, 128, 1500)
+    export_TextDecoder_dynamicLoop_driver(model_name, model, -1, 128, 1500)
+    #export_TextDecoder_dynamicLoop_body(model_name, model, -1, 128, 1500)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
@@ -338,9 +338,9 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #executeExport("tiny")
+    executeExport("tiny")
     #executeExport("base")
-    executeExport("small")
+    #executeExport("small")
     #executeExport("medium")
     #executeExport("tiny.en")
     #executeExport("base.en")

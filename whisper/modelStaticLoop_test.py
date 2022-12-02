@@ -1,3 +1,4 @@
+from optparse import Option
 import os.path
 import numpy as np
 import torch
@@ -9,6 +10,8 @@ import cv2
 from audio import load_audio, log_mel_spectrogram, SAMPLE_RATE
 from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment, TextDecoder_dynamicLoop
 from tokenizer import get_tokenizer
+
+from typing import Optional
 
 def gen_audio_feature_zeros(model):
     return torch.zeros((1,1500,model.whisper.dims.n_text_state), dtype=torch.float32).to(model.whisper.device)
@@ -95,15 +98,16 @@ def testTorch_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
     #print(out_audio_feature[0,0,0])
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
-def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
+def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int, gen):
     mel_t_zeros = gen_mel_zeros(model)
     mel_t = gen_mel(model)
+    mask = torch.zeros((1,3000,1), dtype=torch.uint8).to(model.whisper.device)
 
     ###################################################################
     sess_options = onnxruntime.SessionOptions()
     #providers = ['DmlExecutionProvider']
-    providers = ['CUDAExecutionProvider']
-    #providers = ['CPUExecutionProvider']
+    #providers = ['CUDAExecutionProvider']
+    providers = ['CPUExecutionProvider']
     #sess_options.log_severity_level = 0
     #sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
@@ -111,22 +115,47 @@ def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
     #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
     #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
     #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
-    model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    if gen == 'mask_opt':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
+    elif gen == 'mask_fp16':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+    elif gen == 'mask_qtz':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt_qtz.onnx'
+    elif gen == 'mask':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
+    elif gen == 'mask_fgl_fp16':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt_fgl_fp16.onnx'
+    elif gen == 'mask_fgl':
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt_fgl.onnx'
 
     load_start = time.time()
     session = onnxruntime.InferenceSession(model_path, sess_options, providers)
     print("Load took:", time.time() - load_start, "s")
 
     # warm up
-    ort_inputs = {
-        'mel':  mel_t_zeros.to('cpu').detach().numpy().copy().astype(np.float32)
-    }
+    if gen.startswith('mask'):
+        ort_inputs = {
+            'mel':  mel_t_zeros.to('cpu').detach().numpy().copy().astype(np.float32),
+            'mask':  mask.to('cpu').detach().numpy().copy().astype(np.uint8)
+        }
+    else:
+        ort_inputs = {
+            'mel':  mel_t_zeros.to('cpu').detach().numpy().copy().astype(np.float32)
+        }
+
     for k in range(5):
         out_audio_feature = session.run(None, ort_inputs)
 
-    ort_inputs = {
-        'mel':  mel_t.to('cpu').detach().numpy().copy().astype(np.float32)
-    }
+    if gen.startswith('mask'):
+        ort_inputs = {
+            'mel':  mel_t.to('cpu').detach().numpy().copy().astype(np.float32),
+            'mask':  mask.to('cpu').detach().numpy().copy().astype(np.uint8)
+        }
+    else:
+        ort_inputs = {
+            'mel':  mel_t.to('cpu').detach().numpy().copy().astype(np.float32)
+        }
     inference_start = time.time()
     audio_feature = session.run(None, ort_inputs)
     #print(out_audio_feature[0][0,0,0])
@@ -165,12 +194,13 @@ def testTorch_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int,
 
     decoder = TextDecoder_StaticLoop(model.whisper.decoder, n_ctx_out, isMultilingual, makeOnnxAttentionPastPresent, 64)
 
+    offset = torch.ones((1,1), dtype=torch.int64).to(model.whisper.device) * n_ctx_in
     # warm up
     #for k in range(5):
     #    out_tokens = decoder(in_tokens_zeros, audio_feature_zeros)
 
     inference_start = time.time()
-    out_tokens = decoder(in_tokens, audio_feature)
+    out_tokens = decoder(in_tokens, offset, audio_feature)
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
     out_token_list = []
@@ -331,7 +361,7 @@ def testOnnx_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, isDynamic: 
             print(in_tokens[b, i + 1].to('cpu').detach().numpy().copy(), tokenizer.decode(in_tokens[b, i + 1]), out_alignProbs[b, i])
         print("")
 
-def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, isDynamic: bool):
+def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, isDynamic: bool, gen: Optional[int] = 0):
     isMultilingual = not name.endswith('en')
     tokenizer = get_tokenizer(multilingual=isMultilingual)
     audio_feature = gen_audio_feature(model)
@@ -349,9 +379,25 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     #sess_options.enable_profiling = True
     
     if isDynamic:
-        model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+        if gen == 1:
+            model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_optCs_fp16.onnx'
+            #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+        if gen == 0:
+            model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int64_{name}_opt_fp16.onnx'
+            #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16_scs.onnx'
+        if gen == 5:
+            model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}.onnx'
+            #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+            #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16_scs.onnx'
     else:
-        model_path = f'decoder_sl_a16_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+        if gen == 0:
+            model_path = f'decoder_sl_a16_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
+        if gen == 1:
+            model_path = f'decoder_sl_a16_1_{n_ctx_in}_{n_ctx_out}_1500_int32_{name}_optCs_fp16.onnx'
+        if gen == 2:
+            model_path = f'decoder_sl_a16_1_{n_ctx_in}_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+        if gen == 3:
+            model_path = f'decoder_sl_a16_1_{n_ctx_in}_{n_ctx_out}_1500_int32_{name}_optCs2_fp16.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_smpl_opt16.onnx'
@@ -363,34 +409,48 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     print("Load took:", time.time() - load_start, "s")
 
     # warm up
-    if isDynamic:
+    if gen == 5:
+        ort_inputs = {
+            'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int32),
+            'offset': np.zeros((1,1)).astype(np.int32),
+            'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
+    elif gen >= 1:
         ort_inputs = {
             'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int32),
             'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
         }
-    else:
+    elif gen == 0:
         ort_inputs = {
             'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int64),
             'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
         }
+
     for k in range(3):
         out_tokens = session.run(None, ort_inputs)
 
-    if isDynamic:
+    if gen == 5:
+        ort_inputs = {
+            'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int32),
+            'offset': np.ones((1,1)).astype(np.int32) * n_ctx_in,
+            'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+        }
+    elif gen >= 1:
         ort_inputs = {
             'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int32),
             'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
         }
-    else:
+    if gen == 0:
         ort_inputs = {
             'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int64),
             'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
         }
+
     inference_start = time.time()
     out_tokens = session.run(None, ort_inputs)
     duration = time.time() - inference_start
     print("ONNX RT Inference took:", duration * 1000, "ms")
-    print("ave one inferec Static:", duration * 1000 / (len(out_tokens[0][0]) - 1), "ms")
+    print("ave one inferec Static:", duration * 1000 / len(out_tokens[0][0]), "ms, gen:", gen)
     ###################################################################
 
     text = tokenizer.decode(out_tokens[0][0])
@@ -400,9 +460,9 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
 if __name__ == '__main__':
     #cli()
     from __init__ import load_model
-    #model_name = "tiny"
+    model_name = "tiny"
     #model_name = "base"
-    model_name = "small"
+    #model_name = "small"
     #model_name = "medium"
     #model_name = "tiny.en"
     #model_name = "base.en"
@@ -429,19 +489,36 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 32)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 2)
 
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, True)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 3, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 3)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 3)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 3)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, False, 2)
+
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 1)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 1)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 1)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 2)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 0)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 0)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False, 0)
+
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
@@ -454,7 +531,25 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 32, True)
 
-    #testOnnx_AudioEncoder(model_name, model, 1500, 0)
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_opt')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_opt')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_opt')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl')
+
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_fgl_fp16')
+    #testOnnx_AudioEncoder(model_name, model, 1500, 0, 'mask_qtz')
     #testTorch_AudioEncoder(model_name, model, 1500, 0)
 
     #testOnnx_TextDecoder_ForcedAlignment(model_name, model, 32, True)
@@ -463,4 +558,6 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
 
     #testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 128)
-    testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)
+    #testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)
+
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, True, 5)

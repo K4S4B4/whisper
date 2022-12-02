@@ -22,7 +22,7 @@ def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ct
         file_base = "decoder_sl_a16_"
         output_names = ['out_tokens']
 
-    input_names = ['in_tokens', 'audio_feature']
+    input_names = ['in_tokens', 'offset', 'audio_feature']
 
     file_base += str(n_batch) + "_"
     file_base += str(n_ctx_in) + "_"
@@ -55,9 +55,10 @@ def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ct
         token_list.append(torch.tensor(i, dtype=intDtype).to(device))
     dummy_tokens = torch.stack(token_list).unsqueeze(0)
     dummy_tokens = dummy_tokens.expand(n_batch, n_ctx_in)
+    dummy_offset = torch.zeros((1,1), dtype=intDtype).to(device)
     dummy_audioFeature = torch.randn((1, n_audioFeature, n_state), dtype=torch.float16).to(device)
 
-    inputs = ( dummy_tokens, dummy_audioFeature )
+    inputs = ( dummy_tokens, dummy_offset, dummy_audioFeature )
 
     torch.onnx.export(decoder,
                     inputs,
@@ -110,7 +111,16 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
     #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
-    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
+
+    #export_TextDecoder_StaticLoop(model_name, model, 1, 16, 3, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, 16, 16, 1500, True, 32)
+
+    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 3, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 16, 1500, True, 32)
+
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 3, 1500, True, 64)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 16, 1500, True, 64)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)

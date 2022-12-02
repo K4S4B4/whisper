@@ -7,10 +7,11 @@ import numpy as np
 from model import TextDecoder, ResidualAttentionBlock_KvCache
 
 class WhisperSuppresion(nn.Module):
-    def __init__(self, isMultilingual: bool, device):
+    def __init__(self, isMultilingual: bool, device, ioInt: int):
         super().__init__()
         self.isMultilingual = isMultilingual
         self.device = device
+        self.ioInt = ioInt
         if isMultilingual:
             self.SYMBOL_TOKENS = [1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 359, 503, 522, 542, 873, 893, 902, 918, 922, 931, 1350, 1853, 1982, 2460, 2627, 3246, 3253, 3268, 3536, 3846, 3961, 4183, 4667, 6585, 6647, 7273, 9061, 9383, 10428, 10929, 11938, 12033, 12331, 12562, 13793, 14157, 14635, 15265, 15618, 16553, 16604, 18362, 18956, 20075, 21675, 22520, 26130, 26161, 26435, 28279, 29464, 31650, 32302, 32470, 36865, 42863, 47425, 49870, 50254, 50258, 50360, 50361, 50362]
             self.END_TRANSCRIPT = 50257
@@ -201,14 +202,17 @@ class WhisperSuppresion_staticLoop(WhisperSuppresion):
             _, token = torch.topk(probs, k=1, dim=-1)
             print(_, token )
 
+        #if self.ioInt == 32:
+        #    token = token.to(torch.int32)
+    
         return token
 
 class GreedyDecoder(nn.Module):
-    def __init__(self, in_textDecoder: TextDecoder, isMultilingual: bool):
+    def __init__(self, in_textDecoder: TextDecoder, isMultilingual: bool, ioInt: int):
         super().__init__()
         self.textDecoder = in_textDecoder
         #self.suppressor = WhisperSuppresion(isMultilingual, next(in_textDecoder.parameters()).device)
-        self.suppressor = WhisperSuppresion_staticLoop(isMultilingual, next(in_textDecoder.parameters()).device)
+        self.suppressor = WhisperSuppresion_staticLoop(isMultilingual, next(in_textDecoder.parameters()).device, ioInt)
 
     def getProbs(self, x: Tensor): 
 
@@ -245,16 +249,17 @@ class TextDecoder_StaticLoop(nn.Module):
         self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
         #self.n_ctx_in = n_ctx_in
         self.n_ctx_out = n_ctx_out
-        self.greedyDecoder = GreedyDecoder(in_textDecoder, isMultilingual)
+        self.greedyDecoder = GreedyDecoder(in_textDecoder, isMultilingual, ioInt)
         self.makeOnnxAttentionPastPresent = makeOnnxAttentionPastPresent
 
         self.blocks = []
         for orginal_block in self.textDecoder.blocks:
-            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0))
+            self.blocks.append(ResidualAttentionBlock_KvCache(orginal_block, cacheReturnRule=0, doScaleCross=makeOnnxAttentionPastPresent))
 
         self.ioInt = ioInt
 
     def forward(self, tokens: Tensor, 
+                offset: Tensor,
                 xa: Tensor
                 ):
         """
@@ -273,10 +278,18 @@ class TextDecoder_StaticLoop(nn.Module):
             if block.cross_attn:
                 #cross_k_list.append(block.cross_attn.key(xa))
                 #cross_v_list.append(block.cross_attn.value(xa))
-                cross_k = block.cross_attn.key(xa)
+                cross_k = block.cross_attn.key(xa) #[b,1500,512]
                 cross_v = block.cross_attn.value(xa)
-                cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
-                cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
+                #if self.makeOnnxAttentionPastPresent:
+                if False: # failed to create cross attention node because it only supports maximum 1024 ctx inputs
+                    cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 1, 3) #[b,n_head,1500,64]
+                    cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3) #[b,n_head,1500,64]
+                    cross_kv_stack = torch.stack([cross_k, cross_v], dim=0) #[2,b,n_head,1500,64]
+                    cross_k = cross_kv_stack[0].permute(0, 1, 3, 2)
+                    cross_v = cross_kv_stack[1]
+                else:
+                    cross_k = cross_k.view(*cross_k.shape[:2], self.n_head, 64).permute(0, 2, 3, 1) * self.scale2
+                    cross_v = cross_v.view(*cross_v.shape[:2], self.n_head, 64).permute(0, 2, 1, 3)
                 cross_k_list.append(cross_k)
                 cross_v_list.append(cross_v)
         #n_layer_cross_k = torch.stack(cross_k_list)
@@ -322,12 +335,17 @@ class TextDecoder_StaticLoop(nn.Module):
 
         penultimateToken = lastToken
         lastToken = token
-        position = tokens.shape[1]
+        #position = tokens.shape[1]
+        #position = torch.reshape(tokens.shape[1], [1,1])
+        position = offset
 
         ################## loop itr
         mask = None
         for k in range(self.n_ctx_out - 1):
-            pos_emb_slice = self.textDecoder.positional_embedding[position] #diff!
+            if position.dtype != torch.int64:
+                pos_emb_slice = self.textDecoder.positional_embedding[position.to(torch.int64)] #diff!
+            else:
+                pos_emb_slice = self.textDecoder.positional_embedding[position] #diff!
             x = self.textDecoder.token_embedding(token) + pos_emb_slice #same
             x = x.to(xa.dtype) #same
 
@@ -357,11 +375,12 @@ class TextDecoder_StaticLoop(nn.Module):
             penultimateToken = lastToken
             lastToken = token
             position = position + 1
+            #position = torch.ones((1,1), dtype=torch.int32) + position
 
         out_tokens = torch.cat(out_token_list, dim=-1)
 
         if self.ioInt == 32:
-            out_tokens.to(torch.int32)
+            out_tokens = out_tokens.to(torch.int32)
 
         return out_tokens
 
@@ -491,6 +510,57 @@ class CrossKvCalculator(nn.Module):
         super().__init__()
         self.textDecoder = in_textDecoder
         self.scale2 = in_textDecoder.blocks[0].cross_attn.scale2
+
+        keyWeightList = []
+        valWeightList = []
+        valBiasList = []
+        self.n_layer = 0
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                keyWeightList.append(block.cross_attn.key.weight.permute([1,0]))
+                valWeightList.append(block.cross_attn.value.weight.permute([1,0]))
+                valBiasList.append(block.cross_attn.value.bias)
+                n_state = block.cross_attn.value.bias.data.shape[0]
+                dtype_float = block.cross_attn.value.bias.data.dtype
+                device = block.cross_attn.value.bias.data.device
+                self.n_layer += 1
+                self.n_head = block.cross_attn.n_head
+        self.keyWeights = torch.stack(keyWeightList, dim=0)
+        self.valWeights = torch.stack(valWeightList, dim=0)
+        self.valBiases = torch.stack(valBiasList, dim=0)
+        self.keyBiases = torch.zeros((self.valBiases.shape[0], self.valBiases.shape[1]), dtype=dtype_float).to(device)
+
+        self.weights = torch.cat([self.keyWeights, self.valWeights], dim=0)
+        self.biases = torch.cat([self.keyBiases, self.valBiases], dim=0).unsqueeze(1)
+
+        #self.keys = nn.Linear(n_state, n_state, bias=False)
+        #self.vals = nn.Linear(n_state, n_state)
+        #self.keys.weight = torch.stack(keyWeightList, dim=0)
+        #self.vals.weight = torch.stack(valWeightList, dim=0)
+
+    # cannot export to onnx (bug?)
+    def forwardNew(self, xa: Tensor):
+        cross_kv = torch.matmul(xa, self.weights) 
+        cross_kv += self.biases
+        cross_kv = cross_kv.view(*cross_kv.shape[:2], self.n_head, 64)
+        #cross_k = torch.matmul(xa, self.keyWeights)
+        #cross_v = torch.matmul(xa, self.valWeights) + self.valBiases
+        #cross_k = F.linear(xa, self.keyWeights)
+        #cross_v = F.linear(xa, self.valWeights, self.valWeights)
+        cross_k_list = []
+        cross_v_list = []
+        i = 0
+        for block in self.textDecoder.blocks:
+            if block.cross_attn:
+                j = i + self.n_layer
+                cross_k = cross_kv[i:i+1]
+                cross_v = cross_kv[j:j+1]
+                cross_k = cross_k.permute(0, 2, 3, 1) * self.scale2
+                cross_v = cross_v.permute(0, 2, 1, 3)
+                cross_k_list.append(cross_k)
+                cross_v_list.append(cross_v)
+                i += 1
+        return cross_k_list, cross_v_list
 
     def forward(self, xa: Tensor):
         cross_k_list = []
