@@ -3,7 +3,7 @@ import torch
 
 from modelStaticLoop import TextDecoder_StaticLoop, TextDecoder_ForcedAlignment
 
-def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool, ioInt: int):
+def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ctx_out: int, n_audioFeature: int, makeOnnxAttentionPastPresent: bool, ioInt: int, doUseOffset: bool):
     isMultilingual = not name.endswith('en')
     device = model.whisper.device
     n_state = model.whisper.dims.n_text_state
@@ -23,6 +23,9 @@ def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ct
         output_names = ['out_tokens']
 
     input_names = ['in_tokens', 'audio_feature']
+    if doUseOffset:
+        file_base += "pos_"
+        input_names.append('offset')
 
     file_base += str(n_batch) + "_"
     file_base += str(n_ctx_in) + "_"
@@ -57,10 +60,13 @@ def export_TextDecoder_StaticLoop(name, model, n_batch: int, n_ctx_in: int, n_ct
     dummy_tokens = dummy_tokens.expand(n_batch, n_ctx_in)
     dummy_audioFeature = torch.randn((1, n_audioFeature, n_state), dtype=torch.float16).to(device)
 
-    inputs = ( dummy_tokens, dummy_audioFeature )
+    inputs = [ dummy_tokens, dummy_audioFeature ]
+    if doUseOffset:
+        dummy_offset = torch.ones((1,1), dtype=intDtype).to(device) * n_ctx_in
+        inputs.append(dummy_offset)
 
     torch.onnx.export(decoder,
-                    inputs,
+                    tuple(inputs),
                     file_onnx,
                     export_params=True,
                     opset_version=12,
@@ -110,7 +116,10 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, -1, 3, -1, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 1, 1500, True)
     #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
-    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
+
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 3, 1500, True, 32)
+    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 16, 1500, True, 32, True)
 
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
@@ -134,7 +143,7 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #executeExport("tiny")
+    executeExport("tiny")
     #executeExport("base")
     executeExport("small")
     #executeExport("medium")

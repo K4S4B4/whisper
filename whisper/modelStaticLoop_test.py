@@ -349,7 +349,9 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     #sess_options.enable_profiling = True
     
     if isDynamic:
-        model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+        #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}.onnx'
+        #model_path = f'decoder_sl_a16_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
+        model_path = f'decoder_sl_a16_pos_1_-1_{n_ctx_out}_1500_int32_{name}_opt_fp16.onnx'
     else:
         model_path = f'decoder_sl_a16_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
     #model_path = f'decoder_staticLoop_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
@@ -366,7 +368,8 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     if isDynamic:
         ort_inputs = {
             'in_tokens':  in_tokens_zeros.to('cpu').detach().numpy().copy().astype(np.int32),
-            'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16)
+            'audio_feature': audio_feature_zeros.to('cpu').detach().numpy().copy().astype(np.float16),
+            'offset': np.ones((1,1)).astype(np.int32),
         }
     else:
         ort_inputs = {
@@ -379,7 +382,8 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     if isDynamic:
         ort_inputs = {
             'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int32),
-            'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
+            'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16),
+            'offset': np.ones((1,1)).astype(np.int32) * n_ctx_in
         }
     else:
         ort_inputs = {
@@ -435,11 +439,13 @@ if __name__ == '__main__':
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 8, 8)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 8, 8, False)
 
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, True)
+
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
@@ -463,4 +469,4 @@ if __name__ == '__main__':
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
 
     #testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 128)
-    testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)
+    #testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)

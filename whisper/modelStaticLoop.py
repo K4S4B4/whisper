@@ -3,7 +3,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 import numpy as np
-
+from typing import Optional
 from model import TextDecoder, ResidualAttentionBlock_KvCache
 
 class WhisperSuppresion(nn.Module):
@@ -255,7 +255,8 @@ class TextDecoder_StaticLoop(nn.Module):
         self.ioInt = ioInt
 
     def forward(self, tokens: Tensor, 
-                xa: Tensor
+                xa: Tensor,
+                offset: Optional[Tensor] = None
                 ):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
@@ -322,12 +323,19 @@ class TextDecoder_StaticLoop(nn.Module):
 
         penultimateToken = lastToken
         lastToken = token
-        position = tokens.shape[1]
+
+        if offset is None:
+            position = tokens.shape[1]
+        else:
+            position = offset
 
         ################## loop itr
         mask = None
         for k in range(self.n_ctx_out - 1):
-            pos_emb_slice = self.textDecoder.positional_embedding[position] #diff!
+            if position.dtype == torch.int64:
+                pos_emb_slice = self.textDecoder.positional_embedding[position] #diff!
+            else:
+                pos_emb_slice = self.textDecoder.positional_embedding[position.to(torch.int64)] #diff!
             x = self.textDecoder.token_embedding(token) + pos_emb_slice #same
             x = x.to(xa.dtype) #same
 
@@ -361,7 +369,7 @@ class TextDecoder_StaticLoop(nn.Module):
         out_tokens = torch.cat(out_token_list, dim=-1)
 
         if self.ioInt == 32:
-            out_tokens.to(torch.int32)
+            out_tokens = out_tokens.to(torch.int32)
 
         return out_tokens
 
