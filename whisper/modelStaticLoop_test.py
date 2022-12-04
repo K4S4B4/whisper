@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import onnxruntime
 import time
+from struct import unpack, pack
 
 import cv2
 
@@ -26,8 +27,39 @@ def gen_mel(model):
     mel_t = torch.cat([mel_t, pad], dim=1).to(model.whisper.device)
     return mel_t
 
+def load_mel(device):
+    data_path = "tests/mel_t_pad.dat"
+    data = []
+    with open(data_path, "rb") as f:
+        while True:
+            b = f.read(4)
+            if len(b) == 0:
+                break
+            x = unpack('f', b)
+            data.append(x)
+
+    tensor = torch.tensor(data).to(torch.float32).to(device)
+    tensor = tensor.reshape([1,3000,80])
+    return tensor
+
+def load_audio_feature(size, n_state, device):
+    data_path = "tests/audio_feature_" + size + ".dat"
+    data = []
+    with open(data_path, "rb") as f:
+        while True:
+            b = f.read(4)
+            if len(b) == 0:
+                break
+            x = unpack('f', b)
+            data.append(x)
+
+    tensor = torch.tensor(data).to(torch.float32).to(device)
+    tensor = tensor.reshape([1,1500,n_state])
+    return tensor
+
 def gen_audio_feature(model):
-    mel_t = gen_mel(model)
+    #mel_t = gen_mel(model)
+    mel_t = load_mel(model.whisper.device)
     encoder = model.whisper.encoder
     return encoder(mel_t)
 
@@ -334,7 +366,8 @@ def testOnnx_TextDecoder_ForcedAlignment(name, model, n_ctx_in: int, isDynamic: 
 def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, isDynamic: bool):
     isMultilingual = not name.endswith('en')
     tokenizer = get_tokenizer(multilingual=isMultilingual)
-    audio_feature = gen_audio_feature(model)
+    #audio_feature = gen_audio_feature(model)
+    audio_feature = load_audio_feature(name, 768, model.whisper.device)
     in_tokens = gen_tokens(isMultilingual, tokenizer, n_ctx_in)
     audio_feature_zeros = gen_audio_feature_zeros(model)
     in_tokens_zeros = gen_tokens_zeros(isMultilingual, tokenizer, n_ctx_in)
@@ -390,6 +423,7 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
             'in_tokens':  in_tokens.to('cpu').detach().numpy().copy().astype(np.int64),
             'audio_feature': audio_feature.to('cpu').detach().numpy().copy().astype(np.float16)
         }
+
     inference_start = time.time()
     out_tokens = session.run(None, ort_inputs)
     duration = time.time() - inference_start
@@ -398,7 +432,7 @@ def testOnnx_TextDecoder_StaticLoop(name, model, n_ctx_in: int, n_ctx_out: int, 
     ###################################################################
 
     text = tokenizer.decode(out_tokens[0][0])
-
+    print(out_tokens[0][0].dtype)
     print("ONNX RT:", text)
 
 if __name__ == '__main__':
