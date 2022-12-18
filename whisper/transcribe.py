@@ -380,13 +380,13 @@ if __name__ == '__main__':
     #model_name = "small.en"
     #model_name = "medium.en"
 
-    #model_execute(model_name)
+    model_execute("small")
 
     #model_export("tiny")
-    model_export("base")
+    #model_export("base")
     #model_export("small")
     #model_export("medium")
-    model_export("tiny.en")
-    model_export("base.en")
-    model_export("small.en")
-    model_export("medium.en")
+    #model_export("tiny.en")
+    #model_export("base.en")
+    #model_export("small.en")
+    #model_export("medium.en")

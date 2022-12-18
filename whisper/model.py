@@ -17,8 +17,8 @@ import onnx
 from onnxsim import simplify
 import cv2
 
-#FOR_ONNX_EXPORT: bool = False
-FOR_ONNX_EXPORT: bool = True
+FOR_ONNX_EXPORT: bool = False
+#FOR_ONNX_EXPORT: bool = True
 
 @dataclass
 class ModelDimensions:
@@ -414,6 +414,37 @@ class MultiHeadAttention_SelfKvCache(nn.Module):
         q = self.multiHeadAttention.query(x)
         k = self.multiHeadAttention.key(x)   #(1, n_ctx, 512)
         v = self.multiHeadAttention.value(x) #(1, n_ctx, 512)
+
+        # debug 
+        if mask is None:
+            qt = q.view(*q.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)# * self.scale
+            kt = k.view(*k.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 3, 1)# * self.scale
+
+            qkt = qt @ kt * self.multiHeadAttention.scale2 #1x8x250x1500
+            qkt = qkt.squeeze() #8x250x1500
+
+            qkt0 = torch.cat([qkt[0], qkt[1], qkt[2], qkt[3]], dim=0)
+            qkt1 = torch.cat([qkt[4], qkt[5], qkt[6], qkt[7]], dim=0)
+            qkt8 = torch.cat([qkt0, qkt1], dim=1)
+
+            xnum = qkt8.to('cpu').detach().numpy().copy().astype(np.float32)
+            xmin = xnum.min()
+            xmax = xnum.max()
+            xnum = (xnum - xmin) / (xmax - xmin)
+
+            xnum = cv2.resize(xnum, (500, 1000))
+
+            cv2.imshow("EncAttn_HeadsFlatten", xnum)
+            cv2.waitKey(1000)
+
+            #for i in range(8):
+            #    xmin = xnum[i].min()
+            #    xmax = xnum[i].max()
+            #    xnum[i] = (xnum[i] - xmin) / (xmax - xmin)
+            #    #cv2.imwrite("/EncAttnHead-" + str(i) + ".png", xnum[i])
+            #    #cv2.imshow("/EncAttnHead-" + str(i) + ".png", xnum[i])
+            #    cv2.imshow("/EncAttnHead", xnum[i])
+            #    cv2.waitKey(1)
 
         if self.cacheReturnRule == 3: #return present (1, 8, n_ctx, 64) for Attention node of ONNX contrib com.microsft
             k_t = k.view(*k.shape[:2], self.multiHeadAttention.n_head, 64).permute(0, 2, 1, 3)

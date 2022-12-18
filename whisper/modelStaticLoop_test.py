@@ -127,23 +127,27 @@ def testTorch_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
     #print(out_audio_feature[0,0,0])
     print("PyTorch Inference took:", (time.time() - inference_start) * 1000, "ms")
 
-def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
+def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int, gen:str):
     mel_t_zeros = gen_mel_zeros(model)
     mel_t = gen_mel(model)
 
     ###################################################################
     sess_options = onnxruntime.SessionOptions()
     #providers = ['DmlExecutionProvider']
-    providers = ['CUDAExecutionProvider']
-    #providers = ['CPUExecutionProvider']
+    #providers = ['CUDAExecutionProvider']
+    providers = ['CPUExecutionProvider']
     #sess_options.log_severity_level = 0
     #sess_options.log_verbosity_level = 1
     #sess_options.enable_profiling = True
     
-    #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_smpl.onnx'
+    if gen == "raw":
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
+    elif gen == "opt":
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
+    elif gen == "opt_fp16":
+        model_path = f'encoder_mask_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
     #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}.onnx'
     #model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_opt.onnx'
-    model_path = f'encoder_org_{n_ctx_in}_{n_ctx_out}_{name}_opt_fp16.onnx'
 
     load_start = time.time()
     session = onnxruntime.InferenceSession(model_path, sess_options, providers)
@@ -151,13 +155,15 @@ def testOnnx_AudioEncoder(name, model, n_ctx_in: int, n_ctx_out: int):
 
     # warm up
     ort_inputs = {
-        'mel':  mel_t_zeros.to('cpu').detach().numpy().copy().astype(np.float32)
+        'mel':  mel_t_zeros.to('cpu').detach().numpy().copy().astype(np.float32),
+        'mask':  np.ones((1,3000,1), dtype=np.uint8)
     }
     for k in range(5):
         out_audio_feature = session.run(None, ort_inputs)
 
     ort_inputs = {
-        'mel':  mel_t.to('cpu').detach().numpy().copy().astype(np.float32)
+        'mel':  mel_t.to('cpu').detach().numpy().copy().astype(np.float32),
+        'mask':  np.ones((1,3000,1), dtype=np.uint8)
     }
     inference_start = time.time()
     audio_feature = session.run(None, ort_inputs)
@@ -475,13 +481,6 @@ if __name__ == '__main__':
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 3, True)
 
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
-    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
 
     #testOnnx_TextDecoder_StaticLoop(model_name, model,  32, 32)
     #testTorch_TextDecoder_StaticLoop(model_name, model, 32, 32, False)
@@ -504,3 +503,15 @@ if __name__ == '__main__':
 
     #testTorch_TextDecoder_DynamicLoop(model_name, model, 16, 128)
     #testOnnx_TextDecoder_DynamicLoop(model_name, model, 16)
+
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, True)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testOnnx_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+    #testTorch_TextDecoder_StaticLoop(model_name, model, 16, 16, False)
+
+    testOnnx_AudioEncoder(model_name, model, 1500, 0, "raw")
+    testOnnx_AudioEncoder(model_name, model, 1500, 0, "opt")
+    testOnnx_AudioEncoder(model_name, model, 1500, 0, "opt_fp16")

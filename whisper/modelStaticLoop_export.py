@@ -118,9 +118,6 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, 1, 32, 1, 1500, True, 32)
     #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 1, 1500, True, 32)
 
-    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 3, 1500, True, 32)
-    export_TextDecoder_StaticLoop(model_name, model, 1, -1, 16, 1500, True, 32, True)
-
     #export_TextDecoder_StaticLoop(model_name, model, 8, 2, True)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 4)
     #export_TextDecoder_StaticLoop(model_name, model, 8, 8)
@@ -129,9 +126,13 @@ def executeExport(model_name):
     #export_TextDecoder_StaticLoop(model_name, model, 8, 64)
     #export_TextDecoder_StaticLoop(model_name, model, 32, 64)
 
-    ## forced alignment
-    #export_TextDecoder_StaticLoop(model_name, model, 8, -1, 0, 1500, True, 32)
-    #export_TextDecoder_StaticLoop(model_name, model, 4, 32, 0, 1500, True, 32)
+    # forced alignment v1.0
+    export_TextDecoder_StaticLoop(model_name, model, 8, -1, 0, 1500, True, 32, False)
+
+    ## static loop v1.0
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 3, 1500, True, 32)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 8, 1500, True, 32, True)
+    #export_TextDecoder_StaticLoop(model_name, model, 1, -1, 16, 1500, True, 32, True)
 
 if __name__ == '__main__':
     #model_name = "tiny"
@@ -144,12 +145,12 @@ if __name__ == '__main__':
     #model_name = "medium.en"
 
     executeExport("tiny")
-    #executeExport("base")
-    executeExport("small")
-    #executeExport("medium")
-    #executeExport("tiny.en")
-    #executeExport("base.en")
-    #executeExport("small.en")
-    #executeExport("medium.en")
+    executeExport("base")
+    #executeExport("small")
+    executeExport("medium")
+    executeExport("tiny.en")
+    executeExport("base.en")
+    executeExport("small.en")
+    executeExport("medium.en")
 
     #executeSimplify(model_name)

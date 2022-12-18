@@ -614,14 +614,14 @@ class DecodingTask:
 
             n_layer_self_k_cache = torch.ones((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device) * -1.0*2**8
             n_layer_self_v_cache = torch.zeros((self.model.dims.n_audio_layer, 1, self.model.encoder.n_ctx_cache, self.model.dims.n_audio_state), dtype=mel.dtype).to(self.model.device)
-            self.model.encoder.n_ctx = 150 #n_ctx
+            self.model.encoder.n_ctx = 750 #n_ctx
             cross_k_list = []
             cross_v_list = []
             self_k_list = []
             self_v_list = []
-            for i in range(4):
-                s = (i+0) * 300
-                e = (i+1) * 300
+            for i in range(2):
+                s = (i+0) * 1500
+                e = (i+1) * 1500
                 offset=s/2
                 #offset_tensor = torch.tensor(offset, dtype=torch.int64).to(self.model.device)
                 positions = torch.arange(offset, offset+self.model.encoder.n_ctx, 1, dtype=torch.int64).to(self.model.device)
